@@ -54,8 +54,9 @@ const DEFAULT_HOUR = { morning: 9, afternoon: 15, evening: 19, night: 23 };
 const TENS = { 'двадцать': 20, 'тридцать': 30, 'сорок': 40, 'пятьдесят': 50 };
 
 // Граница слова, совместимая с кириллицей: перед/после слова — не буква и не цифра.
-const WB_L = '(?<![0-9a-z\u0430-\u044f])'; // левая граница (после lower-case строки)
-const WB_R = '(?![0-9a-z\u0430-\u044f])';  // правая граница
+// В файле ниже используются реальные символы а-я/ё, чтобы избежать проблем с экранированием.
+const WB_L = '(?<!\\p{Ll})';      // левая граница слова (юникод-буквы в нижнем регистре)
+const WB_R = '(?!\\p{Ll})';       // правая граница слова
 const w = (word) => WB_L + word + WB_R;    // обёртка для точного слова/фразы без пробелов
 
 function wordToNum(ww) {
@@ -73,12 +74,17 @@ function wordToNum(ww) {
 }
 
 const join = (o) => Object.keys(o).join('|');
-const NUM_ALT = '\d{1,2}|' + join(NUM_WORDS);
+const NUM_ALT = '\\d{1,2}|' + join(NUM_WORDS);
+// Число (слово или цифра), допускающее составные "двадцать пять".
+const NUM_EXPR = '(?:' + NUM_ALT + '(?:[- ](?:' + join(TENS) + '))?(?:[- ](?:' + NUM_ALT + '))?)';
 
 /**
  * parseReminder(фраза, baseDate?) →
  * { when: Date, text: string, timeFound: bool, dateFound: bool, approx: bool }
  */
+// Все паттерны собираются из строк — флаг u обязателен для \p{...}
+function mkRe(pattern) { return new RegExp(pattern); }
+
 export function parseReminder(phrase, baseArg) {
   const base = baseArg || new Date();
   if (!phrase) return { when: null, text: '', timeFound: false, dateFound: false, approx: true };
@@ -100,9 +106,9 @@ export function parseReminder(phrase, baseArg) {
 
   // ---------- A. "через N минут/часов/дней/недель" ----------
   {
-    const re = new RegExp(
-      w('через') + '\s+(полчаса|полторы|полтора|' + NUM_ALT + '(?:[- ](?:' + join(TENS) + '))?(?:[- ]' + NUM_ALT + ')?)' +
-      '\s+(' + 'секунд\w*|минут\w*|час\w*|дн\w*|ден\w*|суток\w*|нед\w*|месяц\w*' + ')' + WB_R
+    const re = mkRe(
+      w('через') + '\\s+(полчаса|полторы|полтора|' + NUM_EXPR + ')' +
+      '\\s+(секунд\\w*|минут\\w*|час\\w*|дн\\w*|ден\\w*|суток\\w*|нед\\w*|месяц\\w*)' + WB_R
     );
     const m = s.match(re);
     if (m) {
@@ -131,14 +137,14 @@ export function parseReminder(phrase, baseArg) {
   // ---------- B. Абсолютная дата и время ----------
   if (!relResult) {
     // "послезавтра / завтра / сегодня / вчера"
-    if (eat(new RegExp(w('послезавтра')))) { dayOffset = 2; dateFound = true; }
-    else if (eat(new RegExp(w('завтра')))) { dayOffset = 1; dateFound = true; }
-    else if (eat(new RegExp(w('сегодня')))) { dayOffset = 0; dateFound = true; }
-    else if (eat(new RegExp(w('вчера')))) { dayOffset = -1; dateFound = true; }
+    if (eat(mkRe(w('послезавтра')))) { dayOffset = 2; dateFound = true; }
+    else if (eat(mkRe(w('завтра')))) { dayOffset = 1; dateFound = true; }
+    else if (eat(mkRe(w('сегодня')))) { dayOffset = 0; dateFound = true; }
+    else if (eat(mkRe(w('вчера')))) { dayOffset = -1; dateFound = true; }
 
     // день недели: "в пятницу", "в следующий вторник"
     if (dayOffset === null) {
-      const m = eat(new RegExp('(?:в\s+)?(?:следующ\w*\s+)?(' + join(WEEKDAYS) + ')' + WB_R));
+      const m = eat(mkRe('(?:в\\s+)?(?:следующ\\w*\\s+)?(' + join(WEEKDAYS) + ')' + WB_R));
       if (m) {
         const target = WEEKDAYS[m[1]];
         let diff = (target - base.getDay() + 7) % 7;
@@ -148,11 +154,78 @@ export function parseReminder(phrase, baseArg) {
       }
     }
 
+    // ---------- C. Время (раньше блока дат, чтобы "10 мая" не съелось как "в 10 ... мая") ----------
+    // Числовое: "15:30", "в 15.30"
+    {
+      const m = eat(/(^|[^0-9.])(\d{1,2})[:.](\d{2})(?![0-9])/);
+      if (m && +m[2] <= 23 && +m[3] < 60) {
+        hour = +m[2]; minute = +m[3]; timeFound = true;
+        consumed[consumed.length - 1].index = m.index + m[1].length;
+        consumed[consumed.length - 1].match = m[0].slice(m[1].length);
+      }
+    }
+
+    // "без четверти шесть", "без пятнадцати три"
+    if (hour === null) {
+      const m = eat(mkRe(w('без') + '\\s+(четвер\\w*|' + NUM_EXPR + ')(?:\\s+минут)?\\s+(час[а-я]*|' + join(ORDINALS) + ')' + WB_R));
+      if (m) {
+        const sub = /^четвер/.test(m[1]) ? 15 : wordToNum(m[1]);
+        const hh = /^час/.test(m[2]) ? 1 : wordToNum(m[2]);
+        if (hh && sub !== null && sub < 60) { hour = hh - 1; minute = 60 - sub; timeFound = true; }
+      }
+    }
+
+    // "половина шестого", "половина десятого"
+    if (hour === null) {
+      const m = eat(mkRe(WB_L + 'половин\\w*' + '\\s+(' + join(ORDINALS) + ')' + WB_R));
+      if (m) {
+        hour = ORDINALS[m[1]] - 1; minute = 30; timeFound = true;
+      }
+    }
+
+    // "полшестого", "пол-шестого", "пол девятого"
+    if (hour === null) {
+      const m = eat(mkRe(WB_L + 'пол[-\\s]?(' + join(ORDINALS) + ')' + WB_R));
+      if (m) {
+        hour = ORDINALS[m[1]] - 1; minute = 30; timeFound = true;
+      }
+    }
+
+    // "в семь часов", "в 5", "в час", "где-то в десять"
+    if (hour === null) {
+      const m = eat(mkRe('(?:где-то\\s+в|примерно\\s+в|около\\s+в|в|у)\\s+(' + NUM_EXPR + '|час[а-я]*|полтора)' + WB_R + '(?:\\s+(?:час[а-я]*|мин\\w*))?'));
+      if (m) {
+        let h = null;
+        if (/^час/.test(m[1])) h = 1;
+        else if (m[1] === 'полтора') { h = 1; minute = 30; }
+        else h = wordToNum(m[1]);
+        if (h !== null && h >= 0 && h <= 23) { hour = h; timeFound = true; }
+      }
+    }
+
+    // "в шесть с четвертью"
+    if (hour !== null && minute === 0) {
+      if (eat(mkRe('с\\s+четверть(?:ю)?' + WB_R))) minute = 15;
+    }
+
+    // часть суток: "утра", "вечером"...
+    {
+      const m = eat(mkRe('(' + join(PARTS_OF_DAY) + ')' + WB_R));
+      if (m) pod = PARTS_OF_DAY[m[1]];
+    }
+
+    // полдень / полночь
+    if (hour === null) {
+      if (eat(mkRe('полдень' + WB_R + '|полудня' + WB_R))) { hour = 12; timeFound = true; }
+      else if (eat(mkRe('полночь' + WB_R + '|полуночи' + WB_R))) { hour = 0; timeFound = true; }
+    }
+
+    // ---------- D. Дата (после времени) ----------
     // "15 октября", "5 мая 2027", "двадцать пятое октября"
     if (dayOffset === null && !absDate) {
-      const m = eat(new RegExp(
-        '(' + NUM_ALT + '|(?:' + join(TENS) + ')[- ]' + NUM_ALT + ')' +
-        '(?:\s+(?:числа|го))?\s+(' + join(MONTHS) + ')' + WB_R + '(?:\s+(\d{4}))?'
+      const m = eat(mkRe(
+        '(' + NUM_EXPR + ')' +
+        '(?:\\s+(?:числа|го))?\\s+(' + join(MONTHS) + ')' + WB_R + '(?:\\s+(\\d{4}))?'
       ));
       if (m) {
         const day = wordToNum(m[1]);
@@ -167,76 +240,7 @@ export function parseReminder(phrase, baseArg) {
       }
     }
 
-    // числовое: "15.10", "15/10/2026" (после времени, чтобы 15:30 не съелось — см. порядок ниже)
-    // (обрабатывается позже, после блока времени)
-
-    // ---------- C. Время ----------
-    // Числовое: "15:30", "в 15.30"
-    {
-      const m = eat(/(^|[^0-9.])(\d{1,2})[:.](\d{2})(?![0-9])/);
-      if (m && +m[2] <= 23 && +m[3] < 60) {
-        hour = +m[2]; minute = +m[3]; timeFound = true;
-        consumed[consumed.length - 1].index = m.index + m[1].length;
-        consumed[consumed.length - 1].match = m[0].slice(m[1].length);
-      }
-    }
-
-    // "без четверти шесть", "без пятнадцати три"
-    if (hour === null) {
-      const m = eat(new RegExp(w('без') + '\s+(четвер\w*|' + NUM_ALT + ')(?:\s+минут)?\s+(час[а-я]*|' + join(ORDINALS) + ')' + WB_R));
-      if (m) {
-        const sub = /^четвер/.test(m[1]) ? 15 : wordToNum(m[1]);
-        const hh = /^час/.test(m[2]) ? 1 : wordToNum(m[2]);
-        if (hh && sub !== null && sub < 60) { hour = hh - 1; minute = 60 - sub; timeFound = true; }
-      }
-    }
-
-    // "половина шестого", "половина десятого"
-    if (hour === null) {
-      const m = eat(new RegExp(WB_L + 'половин\w*' + '\s+(' + join(ORDINALS) + ')' + WB_R));
-      if (m) {
-        hour = ORDINALS[m[1]] - 1; minute = 30; timeFound = true;
-      }
-    }
-
-    // "полшестого", "пол-шестого", "пол девятого"
-    if (hour === null) {
-      const m = eat(new RegExp(WB_L + 'пол[-\s]?(' + join(ORDINALS) + ')' + WB_R));
-      if (m) {
-        hour = ORDINALS[m[1]] - 1; minute = 30; timeFound = true;
-      }
-    }
-
-    // "в семь часов", "в 5", "в час", "где-то в десять"
-    if (hour === null) {
-      const m = eat(new RegExp('(?:где-то\s+в|примерно\s+в|около\s+в|в|у)\s+(' + NUM_ALT + '|час[а-я]*|полтора)' + WB_R + '(?:\s+(?:час[а-я]*|мин\w*))?'));
-      if (m) {
-        let h = null;
-        if (/^час/.test(m[1])) h = 1;
-        else if (m[1] === 'полтора') { h = 1; minute = 30; }
-        else h = wordToNum(m[1]);
-        if (h !== null && h >= 0 && h <= 23) { hour = h; timeFound = true; }
-      }
-    }
-
-    // "в шесть с четвертью"
-    if (hour !== null && minute === 0) {
-      if (eat(new RegExp('с\s+четверть(?:ю)?' + WB_R))) minute = 15;
-    }
-
-    // часть суток: "утра", "вечером"...
-    {
-      const m = eat(new RegExp('(' + join(PARTS_OF_DAY) + ')' + WB_R));
-      if (m) pod = PARTS_OF_DAY[m[1]];
-    }
-
-    // полдень / полночь
-    if (hour === null) {
-      if (eat(new RegExp('полдень' + WB_R + '|полудня' + WB_R))) { hour = 12; timeFound = true; }
-      else if (eat(new RegExp('полночь' + WB_R + '|полуночи' + WB_R))) { hour = 0; timeFound = true; }
-    }
-
-    // числовая дата: "15.10", "15/10/2026" — только если месяц корректный и это не похоже на время
+    // числовая дата: "15.10", "15/10/2026"
     if (dayOffset === null && !absDate) {
       const m = eat(/(^|[^0-9:])(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?(?![0-9:])/);
       if (m) {
@@ -266,7 +270,7 @@ export function parseReminder(phrase, baseArg) {
 
     if (hour !== null) {
       let h = hour;
-      if (pod === 'morning') { if (h === 12) h = 0; }
+      if (pod === 'morning') { if (h < 5) h += 12; if (h === 12) h = 0; }
       else if (pod === 'afternoon') { if (h >= 1 && h <= 5) h += 12; }
       else if (pod === 'evening') { if (h >= 1 && h <= 7) h += 12; }
       else if (pod === 'night') { if (h >= 8 && h <= 11) h += 12; if (h === 12) h = 0; }
@@ -301,11 +305,11 @@ function stripConsumed(s, consumed) {
 
 function cleanup(text) {
   return text
-    .replace(new RegExp('напомнить\s+мне|' + w('напомни') + '|напоминание|напомни-ка|' + w('не забудь') + '|' + w('помяни'), 'gi'), ' ')
+    .replace(mkRe('напомнить\\s+мне|' + w('напомни') + '|напоминание|напомни-ка|' + w('не забудь') + '|' + w('помяни'), 'gi'), ' ')
     .replace(/^\s*(чтобы|про|насчёт|на счёт|о том что|что)\s+/i, '')
-    .replace(new RegExp(w('мне') + '|' + w('нам') + '|' + w('меня'), 'gi'), ' ')
-    .replace(new RegExp(w('пожалуйста'), 'gi'), ' ')
-    .replace(new RegExp(w('где-то') + '|' + w('примерно') + '|' + w('приблизительно') + '|' + w('около'), 'gi'), ' ')
+    .replace(mkRe(w('мне') + '|' + w('нам') + '|' + w('меня'), 'gi'), ' ')
+    .replace(mkRe(w('пожалуйста'), 'gi'), ' ')
+    .replace(mkRe(w('где-то') + '|' + w('примерно') + '|' + w('приблизительно') + '|' + w('около'), 'gi'), ' ')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
     .trim();

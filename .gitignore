@@ -1,9 +1,5 @@
-# Dependencies
-node_modules/
-
-# Build artifacts
-dist/.next/
+(empty)node_modules/
+.next/
 dist/
 build/
 *.log
-.next/
