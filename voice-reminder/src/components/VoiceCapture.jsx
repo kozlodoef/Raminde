@@ -64,7 +64,7 @@ export default function VoiceCapture({ onResult, busy }) {
         <div className="hint">
           {listening
             ? 'Говорите свободно, например: «Напомни завтра в половине десятого позвонить врачу»'
-            : <b>Нажмите на микрофон и скажите,</b> о чём и когда напомнить}
+            : <span><b>Нажмите на микрофон и скажите,</b> о чём и когда напомнить</span>}
         </div>
       ) : (
         <div className="hint">
