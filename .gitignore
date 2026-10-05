@@ -6,3 +6,4 @@ dist/.next/
 dist/
 build/
 *.log
+.next/
