@@ -20,3 +20,12 @@ android/.idea/
 
 # Логи
 *.log
+
+# Credentials and billing data
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+android/.kotlin/

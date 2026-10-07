@@ -87,7 +87,7 @@ for (const [phrase, expectWhen, expectText, tolMin] of cases) {
   } else {
     okTime = got === expectWhen;
   }
-  const okText = r.text.toLowerCase().includes(expectText.toLowerCase().slice(0, 8));
+  const okText = r.text.toLowerCase().replace(/ё/g, 'е').includes(expectText.toLowerCase().replace(/ё/g, 'е').slice(0, 8));
   if (okTime && okText) { pass++; console.log(`✅ "${phrase}"\n     → ${got} | "${r.text}"`); }
   else { fail++; console.log(`❌ "${phrase}"\n     → ${got} | "${r.text}" (ожидалось ${expectWhen || '—'} | ${expectText})`); }
 }
