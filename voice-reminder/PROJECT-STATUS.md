@@ -20,7 +20,8 @@ Capacitor, см. `ANDROID.md`). Платформенные различия вы
 | Тесты планировщика (`node test-scheduler.mjs`) | **23 из 23 проходят** |
 | Сборка (`npm run build`) | **успешно**, 51 модуль |
 | Capacitor CLI 8.5.2 и конфиг | читаются, плагины установлены |
-| Нативный код на устройстве | **не проверялся** (нет SDK и эмулятора) |
+| **APK для Android** | **собран локально**, 4,05 МБ, проверен |
+| Запуск на устройстве | **не проверялся** (эмулятора нет) |
 | Заглушки/TODO в исходниках | не найдено |
 
 Все тесты сразу: `npm test` (или `npm run test:parser`, `npm run test:scheduler`).
@@ -28,11 +29,24 @@ Capacitor, см. `ANDROID.md`). Платформенные различия вы
 ## Android-сборка
 
 Подробности — в `ANDROID.md`. Коротко: добавлены адаптеры `native.js`,
-`speech.js`, `alarm.js`, конфиг `capacitor.config.json` и воркфлоу
-`.github/workflows/android.yml`, который собирает APK в облаке.
+`speech.js`, `alarm.js`, конфиг `capacitor.config.json`, воркфлоу
+`.github/workflows/android.yml` (сборка в облаке) и сам Android-проект.
 
-**Важно:** ни разу не собирался и не запускался сам APK — на этой машине нет
-Android SDK и Java. Веб-часть проверена, нативная нет.
+Тулчейн установлен в `C:\Users\Z0Z\Documents\DEEPSEEK\tools` (JDK 21 + Android
+SDK 36), локальная сборка работает:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\Users\Z0Z\Documents\DEEPSEEK\tools\build-apk.ps1
+```
+
+Готовый APK: `C:\Users\Z0Z\Documents\DEEPSEEK\voice-reminder-debug.apk`
+
+Внутри APK подтверждено: пакет `ru.voicereminder.app`, веб-сборка, 8 dex-файлов,
+разрешения `RECORD_AUDIO`, `POST_NOTIFICATIONS`, `SCHEDULE_EXACT_ALARM`,
+`RECEIVE_BOOT_COMPLETED`, `WAKE_LOCK`, `INTERNET`.
+
+**Осталось проверить на телефоне:** как ведут себя распознавание речи и
+системные будильники. Эмулятора на машине нет, поэтому это только ваша часть.
 
 ## Состав репозитория и .gitignore
 
