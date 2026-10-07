@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { isVoiceSupported, startRecognition, demoPhrase } from '../lib/ai.js';
+import { isVoiceSupported, startRecognition, demoPhrase } from '../lib/speech.js';
 
 /**
  * VoiceCapture — большой микрофон-кнопка. Показывает живую расшифровку,

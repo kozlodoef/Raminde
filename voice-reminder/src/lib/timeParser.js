@@ -59,6 +59,10 @@ const WB_L = '(?<!\\p{Ll})';      // левая граница слова (юн�
 const WB_R = '(?!\\p{Ll})';       // правая граница слова
 const w = (word) => WB_L + word + WB_R;    // обёртка для точного слова/фразы без пробелов
 
+// Внимание: \w в JavaScript НЕ включает кириллицу, поэтому для русских окончаний
+// используем явный класс. Без него шаблоны вида "час\w*" не матчат "часа".
+const RU = '[а-яё]*';
+
 function wordToNum(ww) {
   if (/^\d+$/.test(ww)) return parseInt(ww, 10);
   const k = String(ww).toLowerCase().replace(/ё/g, 'е');
@@ -74,16 +78,28 @@ function wordToNum(ww) {
 }
 
 const join = (o) => Object.keys(o).join('|');
+// Группировка без захвата. Собираем шаблоны только через неё: при ручной
+// склейке строк потерянная скобка делает шаблон тихо неверным.
+const grp = (src) => '(?:' + src + ')';
+
 const NUM_ALT = '\\d{1,2}|' + join(NUM_WORDS);
-// Число (слово или цифра), допускающее составные "двадцать пять".
-const NUM_EXPR = '(?:' + NUM_ALT + '(?:[- ](?:' + join(TENS) + '))?(?:[- ](?:' + NUM_ALT + '))?)';
+// Число (слово или цифра): составные "двадцать пять", круглые десятки
+// "тридцать минут" и одиночные "два".
+// ВАЖНО: длинные формы должны идти РАНЬШЕ коротких. Если поставить NUM_ALT
+// первым, альтернатива "три" совпадёт внутри слова "тридцать" и число
+// посчитается как 3 вместо 30. Сам десяток необязателен ("тридцать минут"),
+// но вместе с единицей — "двадцать пять".
+const TEN_WORDS = grp(join(TENS) + '|пятьдесят');
+const NUM_EXPR = grp(grp(grp(TEN_WORDS + grp('[- ]' + grp(NUM_ALT)) + '?') + '|' + NUM_ALT));
 
 /**
  * parseReminder(фраза, baseDate?) →
  * { when: Date, text: string, timeFound: bool, dateFound: bool, approx: bool }
  */
-// Все паттерны собираются из строк — флаг u обязателен для \p{...}
-function mkRe(pattern) { return new RegExp(pattern); }
+// Все паттерны собираются из строк. Флаг u обязателен: без него \p{Ll}
+// в WB_L/WB_R не является свойством Unicode, границы слов ломаются и слова
+// обрезаются по неверной позиции ("через два часа" → "через два час").
+function mkRe(pattern, flags) { return new RegExp(pattern, flags ? flags + 'u' : 'u'); }
 
 export function parseReminder(phrase, baseArg) {
   const base = baseArg || new Date();
@@ -105,33 +121,57 @@ export function parseReminder(phrase, baseArg) {
   let relResult = null;   // результат для "через N ..."
 
   // ---------- A. "через N минут/часов/дней/недель" ----------
+  // Единица времени. Правая граница — положительный просмотр "пробел или конец",
+  // а НЕ (?!\p{Ll}): та требует, чтобы [а-яё]* остановился ровно перед пробелом,
+  // и если слово длиннее основы ("минуту"), совпадение ломается целиком.
+  const UNIT = '(?:секунд' + RU + '|минут' + RU + '|час' + RU + '|дн' + RU +
+    '|ден' + RU + '|суток' + RU + '|нед' + RU + '|месяц' + RU + ')(?=\\s|$)';
+
+  // Считаем результат "через N <единица>" от base.
+  const relFrom = (n, unit) => {
+    const d = new Date(base);
+    if (unit.startsWith('секунд')) d.setSeconds(d.getSeconds() + Math.round(n));
+    else if (unit.startsWith('минут')) d.setMinutes(d.getMinutes() + Math.round(n));
+    else if (unit.startsWith('час')) d.setMinutes(d.getMinutes() + Math.round(n * 60));
+    else if (/^(дн|ден|суток)/.test(unit)) d.setDate(d.getDate() + Math.round(n));
+    else if (unit.startsWith('нед')) d.setDate(d.getDate() + Math.round(n * 7));
+    else d.setMonth(d.getMonth() + Math.round(n));
+    return d;
+  };
+  const applyRel = (m, token) => {
+    // "полтора часа" = 90 минут: wordToNum это слово не знает.
+    const n = wordToNum(token);
+    relResult = relFrom(n === null && /^полтор/.test(token) ? 1.5 : n, m[2]);
+    consumed.push({ match: m[0], index: m.index });
+  };
+
+  // "полчаса" — отдельное слово, а не "<число> <единица>", поэтому проверяем отдельно.
   {
-    const re = mkRe(
-      w('через') + '\\s+(полчаса|полторы|полтора|' + NUM_EXPR + ')' +
-      '\\s+(секунд\\w*|минут\\w*|час\\w*|дн\\w*|ден\\w*|суток\\w*|нед\\w*|месяц\\w*)' + WB_R
-    );
-    const m = s.match(re);
+    const m = s.match(mkRe(w('через') + '\\s+полчаса' + WB_R));
     if (m) {
-      const token = m[1];
-      const unit = m[2];
       const d = new Date(base);
-      if (token === 'полчаса') {
-        d.setMinutes(d.getMinutes() + 30);
-      } else {
-        let n = wordToNum(token);
-        if (n === null && /^полтор/.test(token)) n = 1.5;
-        if (n !== null) {
-          if (unit.startsWith('секунд')) d.setSeconds(d.getSeconds() + Math.round(n));
-          else if (unit.startsWith('минут')) d.setMinutes(d.getMinutes() + Math.round(n));
-          else if (unit.startsWith('час')) d.setMinutes(d.getMinutes() + Math.round(n * 60));
-          else if (/^(дн|ден|суток)/.test(unit)) d.setDate(d.getDate() + Math.round(n));
-          else if (unit.startsWith('нед')) d.setDate(d.getDate() + Math.round(n * 7));
-          else d.setMonth(d.getMonth() + Math.round(n));
-        }
-      }
+      d.setMinutes(d.getMinutes() + 30);
       relResult = d;
       consumed.push({ match: m[0], index: m.index });
     }
+  }
+
+  // "через час", "через минуту", "через неделю" — число не названо, значит один.
+  if (!relResult) {
+    const m = s.match(mkRe(w('через') + '\\s+(' + UNIT + ')' + WB_R));
+    if (m) {
+      relResult = relFrom(1, m[1]);
+      consumed.push({ match: m[0], index: m.index });
+    }
+  }
+
+  // "через два часа", "через двадцать пять минут", "через тридцать минут".
+  // Число берём через NUM_EXPR: он покрывает и одиночные, и составные, и
+  // круглые десятки. Отдельный шаблон для составных не нужен — NUM_EXPR уже
+  // проверяет длинные формы раньше коротких.
+  if (!relResult) {
+    const m = s.match(mkRe(w('через') + '\\s+(полторы|полтора|' + NUM_EXPR + ')\\s+(' + UNIT + ')' + WB_R));
+    if (m) applyRel(m, m[1]);
   }
 
   // ---------- B. Абсолютная дата и время ----------
@@ -155,19 +195,31 @@ export function parseReminder(phrase, baseArg) {
     }
 
     // ---------- C. Время (раньше блока дат, чтобы "10 мая" не съелось как "в 10 ... мая") ----------
-    // Числовое: "15:30", "в 15.30"
+    // Часть суток ищем заранее и НЕ потребляем: она либо войдёт в состав
+    // выражения времени ("в семь утра"), либо будет поглощена отдельно ниже.
+    // Иначе два перекрывающихся совпадения рвут текст ("в семь" + "утра" → "Ть а").
+    const podRe = mkRe('(?<!\\p{Ll})(' + join(PARTS_OF_DAY) + ')' + WB_R);
+    const podHit = podRe.exec(s);
+    const podSpan = podHit
+      ? { index: podHit.index, match: podHit[0], value: PARTS_OF_DAY[podHit[1]] }
+      : null;
+
+    // Числовое: "15:30", "в 15.30" — предлог "в"/"у" забираем вместе со временем,
+    // иначе он остаётся в тексте напоминания.
     {
-      const m = eat(/(^|[^0-9.])(\d{1,2})[:.](\d{2})(?![0-9])/);
+      const m = eat(mkRe('(^|[^0-9.])(?:(?:в|у)\\s+)?(\\d{1,2})[:.](\\d{2})(?![0-9])'));
       if (m && +m[2] <= 23 && +m[3] < 60) {
         hour = +m[2]; minute = +m[3]; timeFound = true;
         consumed[consumed.length - 1].index = m.index + m[1].length;
         consumed[consumed.length - 1].match = m[0].slice(m[1].length);
+      } else {
+        consumed.pop();   // совпадение не признано временем — не вырезаем его из текста
       }
     }
 
     // "без четверти шесть", "без пятнадцати три"
     if (hour === null) {
-      const m = eat(mkRe(w('без') + '\\s+(четвер\\w*|' + NUM_EXPR + ')(?:\\s+минут)?\\s+(час[а-я]*|' + join(ORDINALS) + ')' + WB_R));
+      const m = eat(mkRe(w('без') + '\\s+(четвер' + RU + '|' + NUM_EXPR + ')(?:\\s+минут)?\\s+(час[а-я]*|' + join(NUM_WORDS) + '|' + join(ORDINALS) + ')' + WB_R));
       if (m) {
         const sub = /^четвер/.test(m[1]) ? 15 : wordToNum(m[1]);
         const hh = /^час/.test(m[2]) ? 1 : wordToNum(m[2]);
@@ -175,9 +227,10 @@ export function parseReminder(phrase, baseArg) {
       }
     }
 
-    // "половина шестого", "половина десятого"
+    // "половина шестого", "половине десятого", "половину седьмого" — любые падежи.
+    // Внимание: без флага u \w не включает кириллицу, поэтому окончание берём явным классом.
     if (hour === null) {
-      const m = eat(mkRe(WB_L + 'половин\\w*' + '\\s+(' + join(ORDINALS) + ')' + WB_R));
+      const m = eat(mkRe(WB_L + 'половин[а-яё]*\\s+(' + join(ORDINALS) + ')' + WB_R));
       if (m) {
         hour = ORDINALS[m[1]] - 1; minute = 30; timeFound = true;
       }
@@ -191,15 +244,25 @@ export function parseReminder(phrase, baseArg) {
       }
     }
 
-    // "в семь часов", "в 5", "в час", "где-то в десять"
+    // "в семь часов", "в 5", "в час", "где-то в десять".
+    // Если сразу за числом стоит часть суток ("в десять вечера", "в семь утра"),
+    // поглощаем её здесь же: два перекрывающихся совпадения рвали текст
+    // и теряли уточнение ("вечера" игнорировалось → 10:00 вместо 22:00).
     if (hour === null) {
-      const m = eat(mkRe('(?:где-то\\s+в|примерно\\s+в|около\\s+в|в|у)\\s+(' + NUM_EXPR + '|час[а-я]*|полтора)' + WB_R + '(?:\\s+(?:час[а-я]*|мин\\w*))?'));
+      const m = eat(mkRe(
+        '(?:где-то\\s+в|примерно\\s+в|около\\s+в|в|у)\\s+(' + NUM_EXPR + '|час' + RU + '|полтора)' + WB_R +
+        '(?:\\s+(?:час' + RU + '|мин' + RU + '))?' +
+        '(?:\\s+((?:' + join(PARTS_OF_DAY) + ')' + WB_R + '))?'
+      ));
       if (m) {
         let h = null;
         if (/^час/.test(m[1])) h = 1;
         else if (m[1] === 'полтора') { h = 1; minute = 30; }
         else h = wordToNum(m[1]);
-        if (h !== null && h >= 0 && h <= 23) { hour = h; timeFound = true; }
+        if (h !== null && h >= 0 && h <= 23) {
+          hour = h; timeFound = true;
+          if (m[2]) pod = PARTS_OF_DAY[m[2]];
+        }
       }
     }
 
@@ -208,10 +271,11 @@ export function parseReminder(phrase, baseArg) {
       if (eat(mkRe('с\\s+четверть(?:ю)?' + WB_R))) minute = 15;
     }
 
-    // часть суток: "утра", "вечером"...
-    {
-      const m = eat(mkRe('(' + join(PARTS_OF_DAY) + ')' + WB_R));
-      if (m) pod = PARTS_OF_DAY[m[1]];
+    // часть суток: "утра", "вечером"... — поглощаем один раз.
+    // Если её уже забрало выражение времени ("в десять вечера"), не трогаем повторно.
+    if (podSpan && pod === null) {
+      pod = podSpan.value;
+      consumed.push({ match: podSpan.match, index: podSpan.index });
     }
 
     // полдень / полночь
@@ -272,7 +336,7 @@ export function parseReminder(phrase, baseArg) {
       let h = hour;
       if (pod === 'morning') { if (h < 5) h += 12; if (h === 12) h = 0; }
       else if (pod === 'afternoon') { if (h >= 1 && h <= 5) h += 12; }
-      else if (pod === 'evening') { if (h >= 1 && h <= 7) h += 12; }
+      else if (pod === 'evening') { if (h >= 1 && h <= 11) h += 12; }   // 10 вечера → 22:00
       else if (pod === 'night') { if (h >= 8 && h <= 11) h += 12; if (h === 12) h = 0; }
       h = ((h % 24) + 24) % 24;
       when.setHours(h, minute, 0, 0);
@@ -304,12 +368,22 @@ function stripConsumed(s, consumed) {
 }
 
 function cleanup(text) {
-  return text
-    .replace(mkRe('напомнить\\s+мне|' + w('напомни') + '|напоминание|напомни-ка|' + w('не забудь') + '|' + w('помяни'), 'gi'), ' ')
+  let t = text
+    // Сначала убираем глагол ("напомни", "напомнить"), чтобы слово даты
+    // оказалось в начале строки и следующий шаг его увидел.
+    .replace(mkRe('напомин' + RU + '|напомн' + RU + '|напоминание|не забудь|помяни', 'gi'), ' ')
     .replace(/^\s*(чтобы|про|насчёт|на счёт|о том что|что)\s+/i, '')
+    .trim();
+  return t
+    // Дата и день недели уже показаны отдельно ("Завтра 07:00 | ..."),
+    // поэтому в тексте действия ведущее слово даты избыточно.
+    .replace(mkRe('^\\s*в?\\s*(?:послезавтра|завтра|сегодня|вчера|(?:' + join(WEEKDAYS) + '))\\s+', 'i'), '')
     .replace(mkRe(w('мне') + '|' + w('нам') + '|' + w('меня'), 'gi'), ' ')
     .replace(mkRe(w('пожалуйста'), 'gi'), ' ')
     .replace(mkRe(w('где-то') + '|' + w('примерно') + '|' + w('приблизительно') + '|' + w('около'), 'gi'), ' ')
+    // Осиротевший предлог: выражение времени вырезано ("... в половине десятого ..."),
+    // а "в" осталось висеть отдельным словом.
+    .replace(mkRe('(^|\\s)в(?=\\s|$)'), '$1')
     .replace(/\s+/g, ' ')
     .replace(/^[\s,.:;-]+|[\s,.:;-]+$/g, '')
     .trim();

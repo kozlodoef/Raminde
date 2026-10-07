@@ -5,6 +5,8 @@ import ReminderList from './components/ReminderList.jsx';
 import AlarmModal from './components/AlarmModal.jsx';
 import Settings from './components/Settings.jsx';
 import { loadReminders, saveReminders, loadSettings, saveSettings, uid } from './lib/storage.js';
+import { planTimer, dueReminders, MAX_TIMEOUT, scheduleAlarm, cancelAlarm, requestNotificationPermission } from './lib/alarm.js';
+import { isNative } from './lib/native.js';
 import { sendPush, requestPushPermission, primeAudio, pushSupported } from './lib/alerts.js';
 
 export default function App() {
@@ -30,6 +32,10 @@ export default function App() {
 
   // --- Планирование таймеров ---
   const fire = useCallback((rem) => {
+    // Снимаем таймер: без этого запись остаётся в timersRef навсегда
+    // и напоминание больше нельзя перепланировать.
+    const timers = timersRef.current;
+    if (timers[rem.id]) { clearTimeout(timers[rem.id]); delete timers[rem.id]; }
     setFiring(rem);
     if (settings.pushEnabled && pushSupported()) {
       if (Notification.permission === 'granted') {
@@ -46,24 +52,48 @@ export default function App() {
     const timers = timersRef.current;
     reminders.forEach((r) => {
       if (r.done || timers[r.id]) return;
-      const delay = new Date(r.when).getTime() - Date.now();
-      if (delay <= 0) {
+      const plan = planTimer(r.when);
+      if (plan.kind === 'invalid') return;   // битую дату не планируем
+      if (plan.kind === 'fire') {
         // просроченное — срабатывает сразу при загрузке
         timers[r.id] = setTimeout(() => { fire(r); }, 50);
-      } else if (delay < 2 ** 31 - 1) {
-        timers[r.id] = setTimeout(() => { fire(r); }, delay);
+      } else if (plan.kind === 'wait') {
+        timers[r.id] = setTimeout(() => { fire(r); }, plan.delay);
       } else {
-        // дальше 24 дней — перепроверим позже
+        // Дальше лимита setTimeout: ставим «заглушку», по её истечении
+        // сбрасываем себя и пересчитываем заново.
         timers[r.id] = setTimeout(() => {
           delete timers[r.id];
           setReminders((prev) => [...prev]); // триггер пересчёта
-        }, 2 ** 31 - 2);
+        }, MAX_TIMEOUT);
       }
     });
   }, [reminders, fire]);
 
   useEffect(() => () => {
     Object.values(timersRef.current).forEach(clearTimeout);
+  }, []);
+
+  // В фоновой вкладке браузер сильно тормозит таймеры, поэтому по возвращении
+  // проверяем, не наступило ли время, пока вкладка спала.
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      const due = dueReminders(reminders);
+      if (due.length) fire(due[0]);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [reminders, fire]);
+
+  // На Android напоминания должны жить в системном будильнике, а не только
+  // в таймерах страницы. Здесь просим разрешение на уведомления и ставим все
+  // будущие напоминания — это важно после обновления приложения или перезапуска,
+  // когда системные будильники могли быть потеряны.
+  useEffect(() => {
+    if (!isNative()) return;
+    requestNotificationPermission();
+    reminders.forEach((r) => { if (!r.done) scheduleAlarm(r); });
   }, []);
 
   // --- Поток создания ---
@@ -74,6 +104,13 @@ export default function App() {
     persist([...reminders.filter((x) => !x.done), r]);
     setPhrase(null);
     showToast('✅ Напоминание создано: «' + text + '»');
+    // На Android ставим системный будильник: таймер страницы не сработает,
+    // если приложение выгружено из памяти.
+    if (isNative()) {
+      scheduleAlarm(r).then((res) => {
+        if (!res.scheduled && res.reason === 'past') showToast('⚠️ Это время уже прошло');
+      });
+    }
     // Запросим разрешение на уведомления заранее, если ещё не спросили
     if (pushSupported() && Notification.permission === 'default') {
       requestPushPermission();
@@ -82,12 +119,15 @@ export default function App() {
 
   const onDelete = (id) => {
     if (timersRef.current[id]) { clearTimeout(timersRef.current[id]); delete timersRef.current[id]; }
+    const victim = reminders.find((r) => r.id === id);
+    if (isNative() && victim) cancelAlarm(victim);
     persist(reminders.filter((r) => r.id !== id));
   };
 
   const onDismissAlarm = () => {
     if (!firing) return;
     // убираем выполненное напоминание из списка
+    if (isNative()) cancelAlarm(firing);
     persist(reminders.filter((r) => r.id !== firing.id));
     setFiring(null);
   };

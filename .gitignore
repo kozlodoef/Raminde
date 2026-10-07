@@ -1,5 +1,22 @@
-(empty)node_modules/
-.next/
+# Зависимости
+node_modules/
+
+# Артефакты сборки
 dist/
 build/
+.next/
+
+# Android: сборочные каталоги и локальные настройки SDK
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.apk
+*.aab
+
+# Кэш сборщика
+.vite/
+
+# Логи
 *.log

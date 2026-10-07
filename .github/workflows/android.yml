@@ -1,0 +1,65 @@
+name: Собрать APK
+
+# Сборка Android-приложения в облаке: локально Android SDK не нужен.
+# Результат — файл app-debug.apk в артефактах запуска и в релизе (для тега).
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: voice-reminder
+
+    steps:
+      - name: Забрать код
+        uses: actions/checkout@v4
+
+      - name: Поставить Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Поставить JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Настроить Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Установить зависимости
+        run: npm install --no-audit --no-fund
+
+      - name: Тесты
+        run: npm test
+
+      - name: Собрать веб-часть
+        run: npm run build
+
+      - name: Добавить платформу Android (если её ещё нет)
+        run: |
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
+      - name: Синхронизировать веб-сборку с Android
+        run: npx cap sync android
+
+      - name: Собрать APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Загрузить APK как артефакт
+        uses: actions/upload-artifact@v4
+        with:
+          name: voice-reminder-debug-apk
+          path: voice-reminder/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
