@@ -280,7 +280,7 @@ export function createBilling({
         amount: { value, currency: "RUB" },
         capture: true,
         description:
-          "Raminde: доступ на " + (body.plan === "yearly" ? "год" : "месяц"),
+          "Remind me: доступ на " + (body.plan === "yearly" ? "год" : "месяц"),
         confirmation: { type: "redirect", return_url: env.RETURN_URL },
         metadata: { invoice: id },
       };

@@ -1,4 +1,4 @@
-# Raminde
+# Remind me
 
 Android-приложение голосовых напоминаний с React/Capacitor-интерфейсом и собственным нативным движком SQLite → AlarmManager → TextToSpeech.
 

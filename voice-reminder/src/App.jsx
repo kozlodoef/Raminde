@@ -690,7 +690,7 @@ function AlarmBox({ event, settings, onAck, onSnooze }) {
       if (settings.sound) playAlarm(false);
       if (settings.mode !== "voice")
         sendPush(
-          "Raminde",
+          "Remind me",
           settings.privateNotification ? "Новое напоминание" : event.text,
         );
       if (settings.mode !== "notification")
@@ -931,7 +931,7 @@ export default function App() {
   if (!state)
     return (
       <main className="app">
-        <h1>Raminde</h1>
+        <h1>Remind me</h1>
         <p>Загружаю напоминания…</p>
         {message && <p className="error">{message}</p>}
       </main>
@@ -950,7 +950,7 @@ export default function App() {
         <div>
           <span className="eyebrow">МАЛЕНЬКИЕ ДЕЛА. ВОВРЕМЯ.</span>
           <h1>
-            Raminde<span>.</span>
+            Remind me<span>.</span>
           </h1>
         </div>
         <button
