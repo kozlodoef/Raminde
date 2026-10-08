@@ -34,7 +34,8 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
-        <receiver android:name=".reminders.AlarmReceiver" android:exported="false">
+        <receiver android:name=".reminders.AlarmReceiver" android:exported="false" />
+        <receiver android:name=".reminders.RestoreReceiver" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.TIME_SET" />

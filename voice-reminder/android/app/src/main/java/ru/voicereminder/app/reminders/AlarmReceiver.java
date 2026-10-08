@@ -4,7 +4,7 @@ import android.app.*;
 import android.os.Build;
 import org.json.*;
 public class AlarmReceiver extends BroadcastReceiver {
- @Override public void onReceive(Context c,Intent intent){String action=intent.getAction();if(action==null)return;if(action.equals(Intent.ACTION_BOOT_COMPLETED)||action.equals(Intent.ACTION_TIME_CHANGED)||action.equals(Intent.ACTION_TIMEZONE_CHANGED)||action.equals(Intent.ACTION_MY_PACKAGE_REPLACED)||action.equals(AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED)){AlarmScheduler.restore(c);return;}
+ @Override public void onReceive(Context c,Intent intent){String action=intent.getAction();if(action==null)return;if(!action.equals(AlarmScheduler.FIRE)&&!action.equals(AlarmScheduler.RETRY)&&!action.equals(AlarmScheduler.ACK)&&!action.equals(AlarmScheduler.SNOOZE))return;
  String id=intent.getStringExtra("id");if(id==null)return;
  try(ReminderStore db=new ReminderStore(c)){
   if(action.equals(AlarmScheduler.ACK)){ack(c,db,id,"notification");return;}if(action.equals(AlarmScheduler.SNOOZE)){snooze(c,db,id,5);return;}

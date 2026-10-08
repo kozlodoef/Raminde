@@ -1341,6 +1341,54 @@ export default function App() {
           >
             Послушать голос
           </button>
+          {isNative() && state.recovery && (
+            <section aria-label="Диагностика перезагрузки">
+              <h3>После перезагрузки</h3>
+              <p className="hint">Версия: {state.recovery.appVersion}</p>
+              <p className="hint">
+                Сигнал загрузки в этой сессии телефона:{" "}
+                {state.recovery.bootConfirmed
+                  ? "получен"
+                  : state.recovery.currentBootCount < 0
+                    ? "не удалось проверить"
+                    : "не получен"}
+                .
+              </p>
+              <p className="hint">
+                Последнее восстановление:{" "}
+                {state.recovery.source === "app_resume"
+                  ? "при открытии приложения"
+                  : state.recovery.source || "ещё не запускалось"}
+                .
+                {state.recovery.completedAt
+                  ? ` Восстановлено сигналов: ${state.recovery.scheduled || 0}.`
+                  : state.recovery.startedAt
+                    ? " Не завершено."
+                    : ""}
+              </p>
+              {state.recovery.bootConfirmed && (
+                <p className="hint">
+                  Восстановление при загрузке:{" "}
+                  {state.recovery.bootRestore?.completedAt
+                    ? `завершено, сигналов: ${state.recovery.bootRestore.scheduled || 0}`
+                    : "не завершено"}
+                  .
+                  {state.recovery.bootRestore?.error
+                    ? ` Ошибка: ${state.recovery.bootRestore.error}`
+                    : ""}
+                </p>
+              )}
+              {state.recovery.error && (
+                <p className="error">{state.recovery.error}</p>
+              )}
+              <p className="hint">
+                Если сигнал загрузки не получен после перезагрузки, Android или
+                MIUI не запустили обработчик. Пришлите снимок этого раздела.
+                Открытие приложения восстановит расписание, но не заменяет
+                работу без запуска.
+              </p>
+            </section>
+          )}
           <p className="hint">
             Включение экрана не считается подтверждением. Автоматическое
             прослушивание на блокировке не включено: Android ограничивает доступ
