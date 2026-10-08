@@ -11,27 +11,14 @@ function fixture() {
     },
   };
 }
-test("ten reservations then quota", async () => {
-  const a = fixture();
-  try {
-    const { token } = await a.route("/api/session", "POST", {});
-    for (let i = 0; i < 10; i++) {
-      const r = await a.route(
-        "/api/quota/reserve",
-        "POST",
-        { id: "r" + i },
-        token,
-      );
-      await a.route("/api/quota/commit", "POST", { token: r.token }, token);
-    }
-    await assert.rejects(
-      a.route("/api/quota/reserve", "POST", { id: "eleven" }, token),
-      /QUOTA/,
-    );
-    assert.equal((await a.route("/api/status", "GET", {}, token)).used, 10);
-  } finally {
-    a.close();
-  }
+test("first month has unlimited reminders; expiry requires subscription", async () => {
+ const a=fixture();try{const {token}=await a.route('/api/session','POST',{});
+ for(let i=0;i<35;i++){const v=await a.route('/api/quota/reserve','POST',{id:'r'+i},token);await a.route('/api/quota/commit','POST',{token:v.token},token);}
+ const status=await a.route('/api/status','GET',{},token);assert.equal(status.trial,true);assert.equal(status.used,35);assert.equal(new Date(status.trialEndsAt).toISOString(),'2026-11-07T12:00:00.000Z');
+ a.setTime('2026-11-07T12:00:00Z');await assert.rejects(a.route('/api/quota/reserve','POST',{id:'new'},token),/SUBSCRIPTION/);
+ await assert.rejects(a.route('/api/quota/reserve','POST',{id:'r0'},token),/SUBSCRIPTION/);
+ assert.equal((await a.route('/api/status','GET',{},token)).active,false);
+ }finally{a.close();}
 });
 test("commit idempotency", async () => {
   const a = fixture();
@@ -187,3 +174,4 @@ test("verified paid transaction grants access once", async () => {
     a.close();
   }
 });
+test('trial cannot restart on calendar-month boundary', async()=>{const a=fixture();try{const {token}=await a.route('/api/session','POST',{});const end=(await a.route('/api/status','GET',{},token)).trialEndsAt;a.setTime('2026-11-01T12:00:00Z');assert.equal((await a.route('/api/status','GET',{},token)).trialEndsAt,end);assert.equal((await a.route('/api/status','GET',{},token)).trial,true);}finally{a.close();}});

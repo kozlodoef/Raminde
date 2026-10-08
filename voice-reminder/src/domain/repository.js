@@ -1,3 +1,4 @@
+import { trialAccess, accessActive } from "./access.js";
 import { registerPlugin } from "@capacitor/core";
 import { isNative } from "../lib/native.js";
 import {
@@ -23,6 +24,7 @@ export const defaults = {
   privateNotification: false,
   rate: 0.95,
   pickerSound: false,
+  autoListen: true,
 };
 const KEY = "raminde.v2";
 export function emptyState() {
@@ -30,6 +32,7 @@ export function emptyState() {
     reminders: [],
     settings: { ...defaults },
     events: [],
+    access: trialAccess(),
     quota: { month: localDate().slice(0, 7), used: 0, timezone: zone() },
     errors: [],
   };
@@ -37,12 +40,16 @@ export function emptyState() {
 function readWeb() {
   try {
     const state = JSON.parse(localStorage.getItem(KEY) || "null");
-    if (state)
-      return {
+    if (state) {
+      const merged = {
         ...emptyState(),
         ...state,
+        access: trialAccess(state.access),
         settings: { ...defaults, ...state.settings },
       };
+      localStorage.setItem(KEY, JSON.stringify(merged));
+      return merged;
+    }
     const old = JSON.parse(localStorage.getItem("vr.reminders") || "[]");
     const valid = old
       .filter(
@@ -59,6 +66,7 @@ function readWeb() {
       }));
     const s = emptyState();
     s.reminders = valid;
+    localStorage.setItem(KEY, JSON.stringify(s));
     return s;
   } catch {
     return emptyState();
@@ -95,7 +103,12 @@ export async function putReminder(reminder, { reservation = null } = {}) {
   const existing = s.reminders.find((r) => r.id === reminder.id);
   const month = localDate(new Date(), s.quota.timezone).slice(0, 7);
   if (month !== s.quota.month) s.quota = { ...s.quota, month, used: 0 };
-  if (!existing && !reservation && s.quota.used >= 10) throw new Error("QUOTA");
+  if (
+    (!existing || reminder.enabled) &&
+    !reservation &&
+    !accessActive(s.access)
+  )
+    throw new Error("SUBSCRIPTION");
   const next = nextOccurrences(reminder.schedule, Date.now(), 1)[0];
   if (reminder.enabled && !next)
     throw new Error("Нет будущих дат для этого расписания");
@@ -189,14 +202,24 @@ export async function speakName(text) {
   }
 }
 
+export async function skipOccurrence(id, at) {
+  if (at <= Date.now())
+    throw Error("Срабатывание уже началось: подтвердите или отложите его");
+  if (isNative()) return Native.skip({ id, at });
+  const s = readWeb(),
+    r = s.reminders.find((v) => v.id === id);
+  if (!r) throw Error("Напоминание не найдено");
+  r.schedule = {
+    ...r.schedule,
+    excludedInstants: [...(r.schedule.excludedInstants || []), at],
+  };
+  r.nextTriggerAt = r.enabled
+    ? nextOccurrences(r.schedule, Date.now(), 1)[0] || null
+    : null;
+  if (!r.nextTriggerAt) r.enabled = false;
+  return saveWeb(s);
+}
 export async function skipNext(reminder) {
-  const next = reminder.nextTriggerAt;
-  if (!next) throw new Error("Нет ближайшего срабатывания");
-  return putReminder({
-    ...reminder,
-    schedule: {
-      ...reminder.schedule,
-      excludedInstants: [...(reminder.schedule.excludedInstants || []), next],
-    },
-  });
+  if (!reminder.nextTriggerAt) throw Error("Нет ближайшего срабатывания");
+  return skipOccurrence(reminder.id, reminder.nextTriggerAt);
 }

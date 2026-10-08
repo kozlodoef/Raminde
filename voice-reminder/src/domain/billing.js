@@ -4,6 +4,7 @@ import { isNative } from "../lib/native.js";
 const API = (import.meta.env.VITE_BILLING_API || "").replace(/\/$/, "");
 export const billingConfigured = !!API;
 async function request(path, method = "GET", body) {
+  if(API && !API.startsWith("https://")) throw new Error("Для оплаты требуется защищённый HTTPS-сервер");
   if (!API)
     throw new Error(
       "Оплата пока не подключена. Требуется настроить российский эквайринг и сервер.",

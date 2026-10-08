@@ -29,6 +29,10 @@ export function createBilling({
   db.exec(
     "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,tokenHash TEXT UNIQUE,expires INTEGER DEFAULT 0,month TEXT,timezone TEXT,used INTEGER DEFAULT 0); CREATE TABLE IF NOT EXISTS reservations(token TEXT PRIMARY KEY,uid TEXT,rid TEXT,month TEXT,state TEXT,created INTEGER,UNIQUE(uid,rid),FOREIGN KEY(uid) REFERENCES users(id)); CREATE TABLE IF NOT EXISTS invoices(id TEXT PRIMARY KEY,uid TEXT,plan TEXT,amount TEXT,payment TEXT UNIQUE,state TEXT,previousExpiry INTEGER,paidAt INTEGER,FOREIGN KEY(uid) REFERENCES users(id));",
   );
+  const cols=db.prepare("PRAGMA table_info(users)").all().map(c=>c.name);
+  if(!cols.includes("trialStartedAt")) db.exec("ALTER TABLE users ADD COLUMN trialStartedAt INTEGER NOT NULL DEFAULT 0");
+  if(!cols.includes("trialEndsAt")) db.exec("ALTER TABLE users ADD COLUMN trialEndsAt INTEGER NOT NULL DEFAULT 0");
+  db.prepare("UPDATE users SET trialStartedAt=?,trialEndsAt=? WHERE trialEndsAt=0").run(now(),addMonths(now(),1));
   const month = (tz) =>
     new Intl.DateTimeFormat("en-CA", {
       timeZone: tz,
@@ -118,7 +122,7 @@ export function createBilling({
       if (row.state === "paid" || row.state === "refunded") return;
       const u = db.prepare("SELECT * FROM users WHERE id=?").get(row.uid);
       const expiry = addMonths(
-        Math.max(now(), u.expires || 0),
+        Math.max(now(), u.expires || 0, u.trialEndsAt || 0),
         row.plan === "yearly" ? 12 : 1,
       );
       db.prepare("UPDATE users SET expires=? WHERE id=?").run(expiry, u.id);
@@ -139,8 +143,8 @@ export function createBilling({
       const id = crypto.randomUUID(),
         auth = crypto.randomBytes(32).toString("base64url");
       db.prepare(
-        "INSERT INTO users(id,tokenHash,month,timezone) VALUES(?,?,?,?)",
-      ).run(id, hash(auth), month(tz), tz);
+        "INSERT INTO users(id,tokenHash,month,timezone,trialStartedAt,trialEndsAt) VALUES(?,?,?,?,?,?)",
+      ).run(id, hash(auth), month(tz), tz, now(), addMonths(now(),1));
       return { token: auth };
     }
     if (path === "/api/webhook" && method === "POST") {
@@ -173,7 +177,7 @@ export function createBilling({
                 .all(inv.uid);
               for (const item of paid)
                 expiry = addMonths(
-                  Math.max(item.paidAt, expiry),
+                  Math.max(item.paidAt, expiry, db.prepare("SELECT trialEndsAt FROM users WHERE id=?").get(inv.uid).trialEndsAt || 0),
                   item.plan === "yearly" ? 12 : 1,
                 );
               db.prepare("UPDATE users SET expires=? WHERE id=?").run(
@@ -197,6 +201,10 @@ export function createBilling({
       const updated = user(token);
       return {
         premium: updated.expires > now(),
+        trial: updated.trialEndsAt > now(),
+        trialStartedAt: updated.trialStartedAt,
+        trialEndsAt: updated.trialEndsAt,
+        active: updated.expires > now() || updated.trialEndsAt > now(),
         expires: updated.expires,
         used: updated.used,
         month: updated.month,
@@ -209,6 +217,7 @@ export function createBilling({
       if (typeof body.id !== "string" || body.id.length > 100 || !body.id)
         throw fail(400, "Неверный идентификатор");
       return transaction(() => {
+        if(u.expires <= now() && u.trialEndsAt <= now()) throw fail(402,"SUBSCRIPTION");
         const previous = db
           .prepare("SELECT * FROM reservations WHERE uid=? AND rid=?")
           .get(u.id, body.id);
@@ -226,8 +235,7 @@ export function createBilling({
             "SELECT COUNT(*) AS n FROM reservations WHERE uid=? AND month=? AND state='reserved'",
           )
           .get(u.id, u.month).n;
-        if (u.expires <= now() && u.used + reserved >= 10)
-          throw fail(402, "QUOTA");
+
         const key = crypto.randomUUID();
         if (previous)
           db.prepare("DELETE FROM reservations WHERE token=?").run(

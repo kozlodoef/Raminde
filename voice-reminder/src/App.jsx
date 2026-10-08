@@ -1,40 +1,38 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startRecognition } from "./lib/speech.js";
-import {
-  speak,
-  cancelSpeech,
-  playAlarm,
-  stopAlarm,
-  sendPush,
-  primeAudio,
-} from "./lib/alerts.js";
-import { parseIntent } from "./domain/intent.js";
-import {
-  defaultSchedule,
-  describe,
-  localDate,
-  nextOccurrences,
-  pad,
-  shortTime,
-  validateSchedule,
-  zone,
-  zonedTime,
-} from "./domain/calendar.js";
+import { primeAudio } from "./lib/alerts.js";
 import {
   defaults,
   getState,
   setSettings,
   putReminder,
   deleteReminder,
-  skipNext,
   acknowledge,
   snooze,
+  skipOccurrence,
   fireWeb,
   permissions,
   requestPermissions,
   speakName,
 } from "./domain/repository.js";
+import {
+  localDate,
+  defaultSchedule,
+  describe,
+  shortTime,
+  nextOccurrences,
+  pad,
+} from "./domain/calendar.js";
+import {
+  COLORS,
+  colorFor,
+  parseGroup,
+  buildGroup,
+  monthBounds,
+  occurrencesInMonth,
+} from "./domain/groups.js";
+import { accessActive } from "./domain/access.js";
 import {
   billingConfigured,
   billingStatus,
@@ -45,755 +43,165 @@ import {
   recoveryKey,
   restoreKey,
 } from "./domain/billing.js";
+import {
+  Modal,
+  Toggle,
+  EditReminder,
+  AlarmBox,
+  Icon,
+} from "./ReminderControls.jsx";
+import "./planner.css";
 const uid = () => crypto.randomUUID();
-function Icon({ name, size = 24 }) {
-  const paths = {
-    mic: "M12 15a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v7a3 3 0 0 0 3 3ZM5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8",
-    settings:
-      "M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8ZM9 3l-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z",
-    plus: "M12 5v14M5 12h14",
-    close: "M6 6l12 12M18 6L6 18",
-    bell: "M6 9a6 6 0 0 1 12 0v6l2 3H4l2-3ZM10 21h4",
-    check: "M5 12l4 4L19 6",
-    arrow: "M5 12h14M13 6l6 6-6 6",
-    stop: "M6 6h12v12H6Z",
-    edit: "M4 20l4-1L20 7l-3-3L5 16Z",
-    trash: "M4 6h16M9 3h6M7 6l1 15h8l1-15M10 10v7M14 10v7",
-  };
+const blank = (index = 0) => ({
+  id: uid(),
+  text: "",
+  dates: [],
+  times: [],
+  color: COLORS[index % COLORS.length],
+  issues: [],
+});
+function cachedDrafts() {
+  try {
+    return JSON.parse(localStorage.getItem("raminde.drafts.v3") || "{}");
+  } catch {
+    return {};
+  }
+}
+const dateLabel = (d) =>
+  new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(
+    new Date(d + "T12:00:00"),
+  );
+function shiftMonth(m, step) {
+  const [y, n] = m.split("-").map(Number),
+    d = new Date(y, n - 1 + step, 1);
+  return d.getFullYear() + "-" + pad(d.getMonth() + 1);
+}
+function NavIcon({ name }) {
   return (
     <svg
-      width={size}
-      height={size}
       viewBox="0 0 24 24"
+      width="23"
+      height="23"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
       aria-hidden="true"
     >
-      <path d={paths[name] || paths.bell} />
+      <path
+        d={
+          name === "home"
+            ? "M3 11l9-8 9 8M5 10v11h5v-7h4v7h5V10"
+            : name === "events"
+              ? "M5 4h14v17H5ZM8 2v5M16 2v5M5 9h14M8 13h3M8 17h7"
+              : "M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8ZM9 3l-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z"
+        }
+      />
     </svg>
   );
 }
-function Modal({ title, children, onClose, wide = false }) {
-  const ref = useRef();
-  useEffect(() => {
-    const prior = document.activeElement;
-    ref.current?.focus();
-    const key = (e) => {
-      if (e.key === "Escape") onClose?.();
-      if (e.key === "Tab") {
-        const els = ref.current?.querySelectorAll(
-          'button:not(:disabled),input,select,textarea,[tabindex="0"]',
-        );
-        if (!els?.length) return;
-        const a = els[0],
-          b = els[els.length - 1];
-        if (e.shiftKey && document.activeElement === a) {
-          e.preventDefault();
-          b.focus();
-        } else if (!e.shiftKey && document.activeElement === b) {
-          e.preventDefault();
-          a.focus();
-        }
-      }
-    };
-    document.addEventListener("keydown", key);
-    return () => {
-      document.removeEventListener("keydown", key);
-      prior?.focus();
-    };
-  }, []);
+function Calendar({ month, onMonth, dates, onDate, occurrences, color }) {
+  const b = monthBounds(month),
+    days = Array.from({ length: b.offset + b.days }, (_, i) =>
+      i < b.offset ? null : month + "-" + pad(i - b.offset + 1),
+    ),
+    today = localDate();
   return (
-    <div className="backdrop">
-      <section
-        ref={ref}
-        tabIndex={-1}
-        className={"sheet " + (wide ? "wide" : "")}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <header className="sheet-header">
-          <h2>{title}</h2>
-          {onClose && (
-            <button
-              className="icon-button"
-              aria-label="Закрыть"
-              onClick={onClose}
-            >
-              <Icon name="close" />
-            </button>
-          )}
-        </header>
-        {children}
-      </section>
-    </div>
-  );
-}
-function Toggle({ label, value, onChange, description }) {
-  return (
-    <label className="setting-row">
-      <span>
-        <strong>{label}</strong>
-        {description && <small>{description}</small>}
-      </span>
-      <input
-        className="toggle"
-        type="checkbox"
-        checked={!!value}
-        onChange={(e) => onChange(e.target.checked)}
-      />
-    </label>
-  );
-}
-function Clock({ value }) {
-  const hm = value || "––:––";
-  return (
-    <div className="clock" aria-label={hm}>
-      <span className="digit" key={"h" + hm.slice(0, 2)}>
-        {hm.slice(0, 2)}
-      </span>
-      <span className="colon">:</span>
-      <span className="digit" key={"m" + hm.slice(3)}>
-        {hm.slice(3)}
-      </span>
-    </div>
-  );
-}
-function Wheel({ label, value, values, onChange }) {
-  const ref = useRef(),
-    timer = useRef();
-  useEffect(() => {
-    const selected = values.indexOf(value);
-    if (ref.current && selected >= 0) ref.current.scrollTop = selected * 48;
-  }, [value]);
-  useEffect(() => () => clearTimeout(timer.current), []);
-  return (
-    <div className="wheel-column">
-      <span className="wheel-label">{label}</span>
-      <div
-        className="wheel"
-        ref={ref}
-        role="listbox"
-        aria-label={label}
-        tabIndex={0}
-        onKeyDown={(e) => {
-          const i = values.indexOf(value);
-          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-            e.preventDefault();
-            onChange(
-              values[
-                Math.max(
-                  0,
-                  Math.min(
-                    values.length - 1,
-                    i + (e.key === "ArrowDown" ? 1 : -1),
-                  ),
-                )
-              ],
-            );
-          }
-        }}
-        onScroll={() => {
-          clearTimeout(timer.current);
-          timer.current = setTimeout(() => {
-            const i = Math.round(ref.current.scrollTop / 48);
-            if (values[i] !== undefined && values[i] !== value)
-              onChange(values[i]);
-          }, 100);
-        }}
-      >
-        <div className="wheel-space" />
-        {values.map((v) => (
-          <button
-            key={v}
-            role="option"
-            aria-selected={v === value}
-            className={v === value ? "chosen" : ""}
-            onClick={() => onChange(v)}
-          >
-            {pad(v)}
-          </button>
-        ))}
-        <div className="wheel-space" />
-      </div>
-    </div>
-  );
-}
-function TimeWheel({ value, onChange }) {
-  const [h, m] = (value || "09:00").split(":").map(Number);
-  return (
-    <div className="time-picker">
-      <Wheel
-        label="Часы"
-        value={h}
-        values={Array.from({ length: 24 }, (_, i) => i)}
-        onChange={(v) => onChange(pad(v) + ":" + pad(m))}
-      />
-      <span>:</span>
-      <Wheel
-        label="Минуты"
-        value={m}
-        values={Array.from({ length: 60 }, (_, i) => i)}
-        onChange={(v) => onChange(pad(h) + ":" + pad(v))}
-      />
-    </div>
-  );
-}
-function EditReminder({ initial, onSave, onClose, busy, settings }) {
-  const [text, setText] = useState(initial.text || ""),
-    [s, setS] = useState(initial.schedule || defaultSchedule()),
-    [error, setError] = useState(""),
-    [advanced, setAdvanced] = useState(false),
-    [remainingIssues, setRemainingIssues] = useState(initial.issues || []);
-  const update = (patch) => {
-    setS((prev) => ({ ...prev, ...patch }));
-    setRemainingIssues([]);
-  };
-  const tz = s.timezoneMode === "fixed" ? s.timezone : zone();
-  const next = validateSchedule(s).length
-    ? []
-    : nextOccurrences(s, Date.now(), 5);
-  const date = s.kind === "once" ? localDate(new Date(s.at), tz) : s.anchorDate;
-  const time = s.kind === "once" ? shortTime(s.at, tz) : s.times[0];
-  const setTime = (hm) => {
-    if (settings.pickerSound) {
-      const audio = new AudioContext();
-      const oscillator = audio.createOscillator(),
-        gain = audio.createGain();
-      gain.gain.value = 0.02;
-      oscillator.connect(gain).connect(audio.destination);
-      oscillator.start();
-      oscillator.stop(audio.currentTime + 0.02);
-      oscillator.onended = () => audio.close();
-    }
-    setS((prev) => {
-      const currentZone =
-        prev.timezoneMode === "fixed" ? prev.timezone : zone();
-      return prev.kind === "once"
-        ? {
-            ...prev,
-            at: new Date(
-              zonedTime(
-                localDate(new Date(prev.at), currentZone),
-                hm,
-                currentZone,
-              ),
-            ).toISOString(),
-          }
-        : { ...prev, times: [hm, ...prev.times.slice(1)] };
-    });
-    setRemainingIssues([]);
-  };
-  const save = async () => {
-    const problems = validateSchedule(s);
-    if (!text.trim()) problems.push("Введите текст напоминания");
-    if (!next.length) problems.push("Нет будущих дат: проверьте условия");
-    if (problems.length) {
-      setError(problems.join(". "));
-      return;
-    }
-    try {
-      await onSave({
-        ...initial,
-        id: initial.id || uid(),
-        text: text.trim(),
-        schedule: s,
-        enabled: initial.enabled ?? true,
-        createdAt: initial.createdAt || Date.now(),
-      });
-    } catch (e) {
-      setError(e.message);
-    }
-  };
-  const list = (key, label, min, max) => (
-    <label className="field">
-      {label}
-      <input
-        value={(s[key] || []).join(", ")}
-        inputMode="numeric"
-        placeholder={`${min}…${max}, через запятую`}
-        onChange={(e) =>
-          update({
-            [key]: e.target.value.split(/[ ,]+/).filter(Boolean).map(Number),
-          })
-        }
-      />
-    </label>
-  );
-  return (
-    <Modal
-      title={initial.id ? "Изменить напоминание" : "Новое напоминание"}
-      onClose={onClose}
-      wide
-    >
-      {initial.originalTranscript && (
-        <p className="transcript">«{initial.originalTranscript}»</p>
-      )}
-      {remainingIssues.length > 0 && (
-        <p className="notice">
-          {remainingIssues.join(". ")}. Проверьте и исправьте поля ниже.
-        </p>
-      )}
-      <label className="field">
-        О чём напомнить
-        <textarea
-          rows={2}
-          value={text}
-          onChange={(e) => {
-            setText(e.target.value);
-            setRemainingIssues([]);
-          }}
-          placeholder="Например, принять таблетку"
-        />
-      </label>
-      <div className="segmented">
-        {[
-          ["once", "Один раз"],
-          ["calendar", "Повтор"],
-          ["interval", "Интервал"],
-        ].map(([kind, label]) => (
-          <button
-            key={kind}
-            className={s.kind === kind ? "selected" : ""}
-            onClick={() =>
-              update({
-                kind,
-                ...(kind === "interval"
-                  ? {
-                      intervalMinutes: 60,
-                      startAt: new Date(Date.now() + 60000).toISOString(),
-                    }
-                  : {}),
-              })
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {s.kind !== "interval" && (
-        <>
-          <TimeWheel value={time} onChange={setTime} />
-          <label className="field">
-            {s.kind === "once" ? "Дата" : "Начать с"}
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => {
-                if (!e.target.value) return;
-                if (s.kind === "once") {
-                  update({
-                    at: new Date(
-                      zonedTime(e.target.value, time, tz),
-                    ).toISOString(),
-                  });
-                } else update({ anchorDate: e.target.value });
-              }}
-            />
-          </label>
-        </>
-      )}
-      {s.kind === "calendar" && (
-        <>
-          <label className="field">
-            Повторять
-            <select
-              value={s.frequency}
-              onChange={(e) =>
-                update({
-                  frequency: e.target.value,
-                  weekdays:
-                    e.target.value === "weekly" && !s.weekdays.length
-                      ? [1]
-                      : s.weekdays,
-                  monthDays:
-                    ["monthly", "yearly"].includes(e.target.value) &&
-                    !s.monthDays.length
-                      ? [new Date().getDate()]
-                      : s.monthDays,
-                  months:
-                    e.target.value === "yearly" && !s.months.length
-                      ? [new Date().getMonth() + 1]
-                      : s.months,
-                })
-              }
-            >
-              <option value="daily">По дням</option>
-              <option value="weekly">По дням недели</option>
-              <option value="monthly">По числам месяца</option>
-              <option value="yearly">По месяцам года</option>
-            </select>
-          </label>
-          <label className="field">
-            Шаг повторения
-            <input
-              type="number"
-              min="1"
-              max="1000"
-              value={s.interval}
-              onChange={(e) => update({ interval: +e.target.value })}
-            />
-          </label>
-          <div className="weekdays" aria-label="Дни недели">
-            {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((w, i) => (
-              <button
-                key={w}
-                aria-pressed={s.weekdays.includes(i + 1)}
-                className={s.weekdays.includes(i + 1) ? "selected" : ""}
-                onClick={() =>
-                  update({
-                    weekdays: s.weekdays.includes(i + 1)
-                      ? s.weekdays.filter((v) => v !== i + 1)
-                      : [...s.weekdays, i + 1],
-                  })
-                }
-              >
-                {w}
-              </button>
-            ))}
-          </div>
-          {list("monthDays", "Числа месяца (пусто — любой день)", 1, 31)}
-          {list("months", "Месяцы (пусто — любой месяц)", 1, 12)}
-          <label className="field">
-            Чётность чисел
-            <select
-              value={s.dayParity}
-              onChange={(e) => update({ dayParity: e.target.value })}
-            >
-              <option value="any">Любая</option>
-              <option value="even">Чётные числа</option>
-              <option value="odd">Нечётные числа</option>
-            </select>
-          </label>
-          <p className="hint">
-            Дни, числа, месяцы и чётность сочетаются вместе. Отсутствующее число
-            месяца пропускается.
-          </p>
-        </>
-      )}
-      {s.kind === "interval" && (
-        <>
-          <label className="field">
-            Каждые, минут
-            <input
-              type="number"
-              min="1"
-              value={s.intervalMinutes}
-              onChange={(e) => update({ intervalMinutes: +e.target.value })}
-            />
-          </label>
-          <label className="field">
-            Первое срабатывание
-            <input
-              type="datetime-local"
-              value={
-                localDate(new Date(s.startAt)) + "T" + shortTime(s.startAt)
-              }
-              onChange={(e) => {
-                if (e.target.value)
-                  update({ startAt: new Date(e.target.value).toISOString() });
-              }}
-            />
-          </label>
-          <div className="two">
-            <label className="field">
-              Не раньше
-              <input
-                type="time"
-                value={s.windowStart || ""}
-                onChange={(e) => update({ windowStart: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              Не позже
-              <input
-                type="time"
-                value={s.windowEnd || ""}
-                onChange={(e) => update({ windowEnd: e.target.value })}
-              />
-            </label>
-          </div>
-        </>
-      )}
-      {s.kind !== "once" && (
-        <>
-          <button
-            className="text-button"
-            onClick={() => setAdvanced(!advanced)}
-          >
-            {advanced ? "Скрыть" : "Дополнительные условия"}
-          </button>
-          {advanced && (
-            <div className="advanced">
-              {s.kind === "calendar" && (
-                <>
-                  <label className="field">
-                    Дополнительное время (через запятую)
-                    <input
-                      placeholder="09:00, 20:00"
-                      value={s.times.join(", ")}
-                      onChange={(e) =>
-                        update({
-                          times: e.target.value.split(/[, ]+/).filter(Boolean),
-                        })
-                      }
-                    />
-                  </label>
-                  <Toggle
-                    label="Последний день месяца"
-                    value={s.lastDay}
-                    onChange={(v) => update({ lastDay: v, monthDays: [] })}
-                  />
-                  <label className="field">
-                    Порядковый день недели
-                    <select
-                      value={s.ordinal || ""}
-                      onChange={(e) =>
-                        update({
-                          ordinal: e.target.value ? +e.target.value : null,
-                          weekday: s.weekday || 1,
-                          monthDays: [],
-                          weekdays: [],
-                        })
-                      }
-                    >
-                      <option value="">Не ограничивать</option>
-                      {[1, 2, 3, 4, 5, -1].map((v) => (
-                        <option key={v} value={v}>
-                          {v === -1 ? "Последний" : v + "-й"}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  {s.ordinal && (
-                    <label className="field">
-                      Какой день
-                      <select
-                        value={s.weekday}
-                        onChange={(e) => update({ weekday: +e.target.value })}
-                      >
-                        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map(
-                          (w, i) => (
-                            <option key={w} value={i + 1}>
-                              {w}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                    </label>
-                  )}
-                </>
-              )}
-              <div className="two">
-                <label className="field">
-                  До даты
-                  <input
-                    type="date"
-                    value={s.until || ""}
-                    onChange={(e) => update({ until: e.target.value || null })}
-                  />
-                </label>
-                <label className="field">
-                  Число срабатываний
-                  <input
-                    type="number"
-                    min="1"
-                    value={s.count || ""}
-                    onChange={(e) =>
-                      update({ count: e.target.value ? +e.target.value : null })
-                    }
-                  />
-                </label>
-              </div>
-              <label className="field">
-                Исключить даты (YYYY-MM-DD)
-                <input
-                  value={s.excludedDates.join(", ")}
-                  onChange={(e) =>
-                    update({
-                      excludedDates: e.target.value
-                        .split(/[, ]+/)
-                        .filter(Boolean),
-                    })
-                  }
-                />
-              </label>
-              <label className="field">
-                Часовой пояс
-                <select
-                  value={s.timezoneMode}
-                  onChange={(e) => update({ timezoneMode: e.target.value })}
-                >
-                  <option value="deviceLocal">Местное время устройства</option>
-                  <option value="fixed">Фиксированный пояс</option>
-                </select>
-              </label>
-              {s.timezoneMode === "fixed" && (
-                <label className="field">
-                  IANA-пояс
-                  <input
-                    value={s.timezone}
-                    onChange={(e) => update({ timezone: e.target.value })}
-                  />
-                </label>
-              )}
-            </div>
-          )}
-        </>
-      )}
-      <div className="summary">
-        <strong>{describe(s)}</strong>
-        <small>Ближайшие срабатывания</small>
-        {next.map((t) => (
-          <span key={t}>
-            {new Intl.DateTimeFormat("ru-RU", {
-              timeZone: tz,
-              day: "numeric",
-              month: "short",
-              weekday: "short",
-              hour: "2-digit",
-              minute: "2-digit",
-              hourCycle: "h23",
-            }).format(t)}
-          </span>
-        ))}
-      </div>
-      {error && (
-        <p role="alert" className="error">
-          {error === "QUOTA"
-            ? "Бесплатный лимит закончился. Откройте раздел подписки."
-            : error}
-        </p>
-      )}
-      <button
-        className="primary full"
-        disabled={busy || remainingIssues.length > 0}
-        onClick={save}
-      >
-        {busy ? "Сохраняю…" : "Сохранить напоминание"}
-      </button>
-    </Modal>
-  );
-}
-function AlarmBox({ event, settings, onAck, onSnooze }) {
-  const [hearing, setHearing] = useState(false),
-    [error, setError] = useState(""),
-    rec = useRef();
-  useEffect(() => {
-    if (isNative()) return;
-    let n = 0;
-    const alert = () => {
-      n++;
-      if (settings.sound) playAlarm(false);
-      if (settings.mode !== "voice")
-        sendPush(
-          "Remind me",
-          settings.privateNotification ? "Новое напоминание" : event.text,
-        );
-      if (settings.mode !== "notification")
-        speak((settings.name ? settings.name + "! " : "") + event.text);
-    };
-    alert();
-    const timer = settings.repeat
-      ? setInterval(() => {
-          if (!settings.maxAttempts || n < settings.maxAttempts) alert();
-        }, settings.repeatMinutes * 60000)
-      : null;
-    return () => {
-      clearInterval(timer);
-      stopAlarm();
-      cancelSpeech();
-      rec.current?.abort();
-    };
-  }, [event.id, event.attemptCount]);
-  const listen = async () => {
-    setError("");
-    setHearing(true);
-    try {
-      rec.current = await startRecognition();
-      const text = (await rec.current.promise)
-        .toLowerCase()
-        .trim()
-        .replace(/[.!?,]/g, "");
-      const words = settings.keywords
-        .split(",")
-        .map((w) => w.trim().toLowerCase());
-      if (words.includes(text)) {
-        onAck("voice");
-      } else if (/отложи|позже/.test(text)) onSnooze();
-      else
-        setError(
-          "Не услышал подтверждение. Нажмите «Понятно» или попробуйте ещё.",
-        );
-    } catch (e) {
-      setError("Не удалось распознать ответ: " + e.message);
-    } finally {
-      setHearing(false);
-    }
-  };
-  return (
-    <Modal title="Пора вспомнить" wide>
-      <div className="alarm-icon">
-        <Icon name="bell" size={40} />
-      </div>
-      <h3 className="alarm-name">
-        {settings.name ? settings.name + "!" : "Напоминание"}
-      </h3>
-      <p className="alarm-text">{event.text}</p>
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-      <button className="primary full" onClick={() => onAck("button")}>
-        <Icon name="check" />
-        Понятно
-      </button>
-      <button className="secondary full" onClick={onSnooze}>
-        Отложить на 5 минут
-      </button>
-      {settings.voiceAck && (
+    <section className="month-card" aria-label="Календарь">
+      <header>
         <button
-          className="text-button full"
-          disabled={hearing}
-          onClick={listen}
+          aria-label="Предыдущий месяц"
+          className="icon-button"
+          onClick={() => onMonth(shiftMonth(month, -1))}
         >
-          <Icon name="mic" />
-          {hearing ? "Слушаю…" : "Ответить голосом"}
+          ‹
         </button>
-      )}
-      <p className="hint">
-        Подтверждение завершает только это срабатывание, не всю серию.
-      </p>
-    </Modal>
+        <h2>
+          {new Intl.DateTimeFormat("ru-RU", {
+            month: "long",
+            year: "numeric",
+          }).format(new Date(month + "-01T12:00:00"))}
+        </h2>
+        <button
+          aria-label="Следующий месяц"
+          className="icon-button"
+          onClick={() => onMonth(shiftMonth(month, 1))}
+        >
+          ›
+        </button>
+      </header>
+      <div className="weekdays">
+        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((v) => (
+          <span key={v}>{v}</span>
+        ))}
+      </div>
+      <div className="days">
+        {days.map((d, i) => {
+          if (!d) return <span key={"empty" + i} />;
+          const dots = [
+            ...new Set(
+              occurrences.filter((e) => e.date === d).map((e) => e.color),
+            ),
+          ];
+          return (
+            <button
+              key={d}
+              className={
+                "day " +
+                (dates.includes(d) ? "selected " : "") +
+                (d === today ? "today" : "")
+              }
+              style={{ "--event": color }}
+              aria-label={dateLabel(d)}
+              aria-pressed={dates.includes(d)}
+              onClick={() => onDate(d)}
+            >
+              <span>{+d.slice(-2)}</span>
+              <span className="date-dots">
+                {dots.slice(0, 3).map((c) => (
+                  <i key={c} style={{ background: c }} />
+                ))}
+                {dots.length > 3 && <small>+</small>}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 export default function App() {
   const [state, setState] = useState(null),
-    [perms, setPerms] = useState(null),
-    [modal, setModal] = useState(null),
-    [draft, setDraft] = useState(null),
-    [listening, setListening] = useState(false),
+    [activation, setActivation] = useState(0),
+    [tab, setTab] = useState("home"),
+    [month, setMonth] = useState(localDate().slice(0, 7)),
+    [draft, setDraft] = useState(() => cachedDrafts().draft || blank()),
+    [queue, setQueue] = useState(() => cachedDrafts().queue || []),
+    [voice, setVoice] = useState("idle"),
     [live, setLive] = useState(""),
     [message, setMessage] = useState(""),
     [busy, setBusy] = useState(false),
-    [name, setName] = useState(""),
+    [modal, setModal] = useState(null),
+    [perms, setPerms] = useState(null),
     [bill, setBill] = useState(null),
-    [receiptEmail, setReceiptEmail] = useState(""),
-    [restoreCode, setRestoreCode] = useState(""),
-    [displayKey, setDisplayKey] = useState("");
+    [name, setName] = useState(""),
+    [time, setTime] = useState("09:00"),
+    [email, setEmail] = useState(""),
+    [key, setKey] = useState(""),
+    [editing, setEditing] = useState(null);
   const recording = useRef(),
-    pendingStop = useRef(false),
-    mounted = useRef(true);
+    draftRef = useRef(draft),
+    mounted = useRef(true),
+    starting = useRef(false);
+  draftRef.current = draft;
+  useEffect(() => {
+    localStorage.setItem("raminde.drafts.v3", JSON.stringify({ draft, queue }));
+  }, [draft, queue]);
   const refresh = async () => {
     try {
       const s = await (isNative() ? getState() : fireWeb());
       if (mounted.current) setState(s);
     } catch (e) {
-      setMessage(e.message);
+      if (mounted.current) setMessage(e.message);
     }
   };
   useEffect(() => {
@@ -802,94 +210,218 @@ export default function App() {
     refresh();
     permissions()
       .then(setPerms)
-      .catch((e) => setMessage(e.message));
-    const timer = setInterval(refresh, 1500);
+      .catch(() => {});
+    const id = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 1500);
     const visible = () => {
-      if (document.visibilityState === "visible") {
+      if (document.hidden) {
+        recording.current?.abort();
+        setVoice("idle");
+      } else {
+        setActivation((n) => n + 1);
         refresh();
-        permissions().then(setPerms);
+        permissions()
+          .then(setPerms)
+          .catch(() => {});
       }
     };
     document.addEventListener("visibilitychange", visible);
     return () => {
       mounted.current = false;
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", visible);
+      clearInterval(id);
       recording.current?.abort();
+      document.removeEventListener("visibilitychange", visible);
     };
   }, []);
   useEffect(() => {
-    if (state && !state.settings.onboarded && !modal) {
-      setName(state.settings.name || "");
-      setModal("onboarding");
-    }
+    if (state) document.documentElement.dataset.theme = state.settings.theme;
+  }, [state?.settings.theme]);
+  useEffect(() => {
+    if (state && !state.settings.onboarded) setModal("welcome");
   }, [!!state]);
   useEffect(() => {
-    if (modal === "onboarding" && isNative())
-      speakName("Здравствуйте! Как к вам обращаться?").catch(() => {});
-  }, [modal]);
-  useEffect(() => {
-    if (!state) return;
-    document.documentElement.dataset.theme = state.settings.theme;
-  }, [state?.settings.theme]);
-  const say = async () => {
-    pendingStop.current = false;
+    if (billingConfigured && state)
+      billingStatus()
+        .then(setBill)
+        .catch((e) => setMessage(e.message));
+  }, [!!state]);
+  const alarm = state?.events.find((e) =>
+    ["ringing", "waiting"].includes(e.state),
+  );
+  async function listen() {
+    if (starting.current || recording.current || document.hidden) return;
+    starting.current = true;
+    setVoice("starting");
     setMessage("");
-    setListening(true);
-    setLive("Слушаю…");
+    setLive("");
     try {
-      const session = await startRecognition({ onInterim: setLive });
+      const session = await startRecognition({
+        onStart: () => mounted.current && setVoice("listening"),
+        onInterim: (t) => mounted.current && setLive(t),
+      });
       recording.current = session;
-      if (pendingStop.current || !mounted.current) {
-        await session.abort();
-        return;
-      }
       const text = await session.promise;
-      if (!text) {
-        setMessage("Речь не распознана. Попробуйте ещё раз или введите текст.");
-        return;
+      if (!mounted.current) return;
+      if (text) {
+        setVoice("processing");
+        const current = draftRef.current,
+          p = parseGroup(text, current.dates);
+        setDraft({ ...current, ...p, color: current.color, id: current.id });
+        setLive(text);
       }
-      if (modal === "onboarding") {
-        setName(text.replace(/[.!?]/g, ""));
-        return;
-      }
-      setDraft(parseIntent(text));
-      setModal("editor");
     } catch (e) {
-      setMessage(
-        e.message.includes("not-allowed")
-          ? "Разрешите доступ к микрофону в настройках устройства."
-          : "Не удалось распознать речь. Можно ввести напоминание вручную.",
-      );
+      if (mounted.current)
+        setMessage(
+          e.message.includes("not-allowed")
+            ? "Разрешите микрофон. Можно также ввести текст вручную."
+            : "Не удалось распознать речь. Нажмите микрофон или введите текст.",
+        );
     } finally {
       recording.current = null;
-      setListening(false);
-      setLive("");
+      starting.current = false;
+      if (mounted.current) setVoice("idle");
     }
-  };
-  const stop = () => {
-    pendingStop.current = true;
-    recording.current?.stop();
-  };
-  const saveSettings = async (patch) => {
-    try {
-      setState(await setSettings({ ...state.settings, ...patch }));
-    } catch (e) {
-      setMessage("Не удалось сохранить настройки: " + e.message);
+  }
+  useEffect(() => {
+    if (tab !== "home" || alarm) {
+      recording.current?.abort();
+      return;
     }
+    if (!state?.settings.onboarded || !state.settings.autoListen || modal)
+      return;
+    const t = setTimeout(listen, 400);
+    return () => clearTimeout(t);
+  }, [
+    tab,
+    !!alarm,
+    state?.settings.onboarded,
+    state?.settings.autoListen,
+    activation,
+  ]);
+  useEffect(() => {
+    if (modal) recording.current?.abort();
+  }, [modal]);
+  const patch = (value) =>
+    setDraft((d) => ({
+      ...d,
+      ...value,
+      issues: value.dates
+        ? []
+        : value.times
+          ? (d.issues || []).filter(
+              (e) => !e.includes("время") && !e.includes("Во сколько"),
+            )
+          : value.text
+            ? (d.issues || []).filter(
+                (e) => !e.includes("о чём") && !e.includes("текст"),
+              )
+            : d.issues || [],
+      schedule: Object.prototype.hasOwnProperty.call(value, "schedule")
+        ? value.schedule
+        : d.schedule?.kind === "dates"
+          ? {
+              ...d.schedule,
+              dates: value.dates ?? d.dates,
+              times: value.times ?? d.times,
+            }
+          : d.schedule,
+    }));
+  const pick = (d) => {
+    if (
+      draftRef.current.schedule &&
+      draftRef.current.schedule.kind !== "dates"
+    ) {
+      setMessage(
+        "Для повторяющейся серии изменяйте правило в «Повторении». Для отдельных дат начните новый черновик.",
+      );
+      return;
+    }
+    patch({
+      dates: draft.dates.includes(d)
+        ? draft.dates.filter((x) => x !== d)
+        : [...draft.dates, d].sort(),
+      dateConflict: null,
+    });
   };
-  const save = async (r) => {
-    setBusy(true);
-    let token,
-      saved = false;
-    try {
-      if (!state.reminders.some((x) => x.id === r.id) && billingConfigured) {
-        const reserved = await reserveQuota(r.id);
-        token = reserved.token;
+  const remindersKey = JSON.stringify([
+    state?.reminders || [],
+    state?.events || [],
+  ]);
+  const entries = useMemo(() => {
+    const list = occurrencesInMonth(state?.reminders || [], month);
+    for (const e of state?.events || []) {
+      const date = localDate(new Date(e.scheduledAt));
+      if (!date.startsWith(month)) continue;
+      const existing = list.find((v) => v.id === e.id);
+      if (existing) {
+        existing.status = e.state;
+        continue;
       }
-      setState(await putReminder(r, { reservation: token }));
-      saved = true;
-      if (token) {
+      const index = state.reminders.findIndex((r) => r.id === e.reminderId),
+        rule = state.reminders[index];
+      list.push({
+        id: e.id,
+        reminderId: e.reminderId,
+        text: e.text,
+        at: e.scheduledAt,
+        date,
+        time: shortTime(e.scheduledAt),
+        color: colorFor(rule || {}, Math.max(0, index)),
+        status: e.state,
+      });
+    }
+    return list.sort((a, b) => a.at - b.at || a.text.localeCompare(b.text));
+  }, [remindersKey, month]);
+  const preview = useMemo(() => {
+    try {
+      return buildGroup(draft, Date.now(), {
+        allowPast: state?.reminders.some((r) => r.id === draft.id),
+      });
+    } catch {
+      return null;
+    }
+  }, [draft]);
+  const marks = useMemo(
+    () => [
+      ...entries,
+      ...occurrencesInMonth([...queue, ...(preview ? [preview] : [])], month),
+    ],
+    [entries, queue, preview, month],
+  );
+  const setting = async (p) => {
+    try {
+      setState(await setSettings({ ...state.settings, ...p }));
+    } catch (e) {
+      setMessage(e.message);
+    }
+  };
+  function newDraft() {
+    recording.current?.abort();
+    setDraft(blank((state?.reminders.length || 0) + queue.length + 1));
+    setLive("");
+    setEditing(null);
+  }
+  function add() {
+    try {
+      const r = buildGroup(draft, Date.now(), {
+        allowPast: state?.reminders.some((r) => r.id === draft.id),
+      });
+      setQueue((q) => [...q, r]);
+      newDraft();
+      setMessage("Добавлено в черновики. «Готово» сохранит все.");
+      setTimeout(listen, 100);
+    } catch (e) {
+      setMessage(e.message);
+    }
+  }
+  async function persist(r) {
+    let token;
+    try {
+      if (billingConfigured) token = (await reserveQuota(r.id)).token;
+      const s = await putReminder(r, { reservation: token });
+      setState(s);
+      if (token)
         try {
           await commitQuota(token);
         } catch {
@@ -901,526 +433,836 @@ export default function App() {
             JSON.stringify([...new Set([...pending, token])]),
           );
         }
-      }
-      setModal(null);
-      setDraft(null);
-      setMessage("Напоминание сохранено и запланировано");
     } catch (e) {
-      if (token && !saved) await releaseQuota(token).catch(() => {});
-      if (e.message === "QUOTA") {
-        setMessage("Лимит бесплатных напоминаний закончился.");
-        setModal("subscription");
-      }
+      if (token) await releaseQuota(token).catch(() => {});
       throw e;
+    }
+  }
+  async function save() {
+    setBusy(true);
+    recording.current?.stop();
+    try {
+      if (starting.current || recording.current)
+        throw Error("Дождитесь завершения расшифровки");
+      const batch = [
+        ...queue,
+        ...(draft.text.trim()
+          ? [
+              buildGroup(draft, Date.now(), {
+                allowPast: state?.reminders.some((r) => r.id === draft.id),
+              }),
+            ]
+          : []),
+      ];
+      if (!batch.length) throw Error("Добавьте событие и время");
+      for (const r of batch)
+        buildGroup(r, Date.now(), {
+          allowPast: state.reminders.some((x) => x.id === r.id),
+        });
+      for (const r of batch) {
+        await persist(r);
+        setQueue((q) => q.filter((x) => x.id !== r.id));
+        if (r.id === draft.id) {
+          setDraft(blank((state?.reminders.length || 0) + batch.length));
+          setLive("");
+        }
+      }
+      setMessage(`Сохранено групп: ${batch.length}`);
+      setEditing(null);
+    } catch (e) {
+      setMessage(
+        e.message === "SUBSCRIPTION"
+          ? "Пробный месяц закончился. Нужна подписка."
+          : e.message,
+      );
+      if (e.message === "SUBSCRIPTION") setModal("access");
     } finally {
       setBusy(false);
     }
-  };
-  const loadBill = async () => {
-    try {
-      const pending = JSON.parse(
-        localStorage.getItem("raminde.pendingQuota") || "[]",
-      );
-      for (const token of pending) await commitQuota(token);
-      localStorage.removeItem("raminde.pendingQuota");
-      setBill(await billingStatus());
-    } catch (e) {
-      setMessage(e.message);
-    }
-  };
+  }
+  function editRule(r) {
+    recording.current?.abort();
+    setDraft({
+      ...r,
+      dates:
+        r.schedule.kind === "dates"
+          ? r.schedule.dates
+          : r.schedule.kind === "once"
+            ? [localDate(new Date(r.schedule.at))]
+            : [],
+      times:
+        r.schedule.kind === "once"
+          ? [shortTime(r.schedule.at)]
+          : r.schedule.times || [],
+      schedule: r.schedule.kind === "once" ? null : r.schedule,
+      issues: [],
+      dateConflict: null,
+    });
+    setLive(r.originalTranscript || "");
+    setEditing(r.id);
+    setTab("home");
+    if (r.schedule.kind === "dates") setMonth(r.schedule.dates[0].slice(0, 7));
+  }
   if (!state)
     return (
-      <main className="app">
-        <h1>Remind me</h1>
-        <p>Загружаю напоминания…</p>
+      <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
+        <p>Загружаю Remind me…</p>
         {message && <p className="error">{message}</p>}
       </main>
     );
-  const settings = state.settings,
-    active = state.events.filter((e) =>
-      ["ringing", "waiting"].includes(e.state),
-    ),
-    alarm = active[0],
-    reminders = [...state.reminders].sort(
-      (a, b) => (a.nextTriggerAt || Infinity) - (b.nextTriggerAt || Infinity),
-    );
+  const settings = state.settings;
+  const dates = draft.dates.length ? draft.dates : [localDate()];
+  const trial = bill?.trialEndsAt || state.access?.trialEndsAt,
+    active = bill ? bill.active : accessActive(state.access);
+  const daysLeft = Math.max(0, Math.ceil((trial - Date.now()) / 86400000));
+  const eventDates = [...new Set(entries.map((e) => e.date))];
   return (
-    <main className="app">
-      <header className="top">
-        <div>
-          <span className="eyebrow">МАЛЕНЬКИЕ ДЕЛА. ВОВРЕМЯ.</span>
-          <h1>
-            Remind me<span>.</span>
-          </h1>
-        </div>
-        <button
-          className="icon-button"
-          aria-label="Настройки"
-          onClick={() => setModal("settings")}
-        >
-          <Icon name="settings" />
-        </button>
-      </header>
-      {!isNative() && (
-        <p className="platform-note">
-          Веб-предпросмотр: напоминания работают, пока эта вкладка открыта. Для
-          фоновой работы установите Android-приложение.
-        </p>
-      )}
-      {isNative() &&
-        perms &&
-        (!perms.exact || perms.notifications !== "granted") && (
-          <button
-            className="notice full"
-            onClick={() =>
-              requestPermissions()
-                .then(setPerms)
-                .catch((e) => setMessage(e.message))
-            }
-          >
-            Разрешить уведомления и точные будильники
-          </button>
-        )}
-      <section className="hero">
-        <p className="greeting">
-          {settings.name
-            ? `${settings.name}, что напомнить?`
-            : "Что вам напомнить?"}
-        </p>
-        <button
-          className={"microphone " + (listening ? "listening" : "")}
-          aria-label={listening ? "Остановить запись" : "Создать голосом"}
-          onClick={listening ? stop : say}
-          disabled={!!alarm}
-        >
-          <Icon name={listening ? "stop" : "mic"} size={36} />
-        </button>
-        <h2>{listening ? "Я слушаю" : "Просто скажите"}</h2>
-        <p className="hint">
-          «Каждый понедельник в 9 утра
-          <br />
-          напомни принять таблетку»
-        </p>
-        {live && (
-          <p className="live" aria-live="polite">
-            {live}
-          </p>
-        )}
-        <button
-          className="text-button"
-          onClick={() => {
-            setDraft({ text: "", schedule: defaultSchedule() });
-            setModal("editor");
-          }}
-        >
-          или введите вручную <Icon name="arrow" size={18} />
-        </button>
-      </section>
-      {message && (
-        <div className="feedback" role="status">
-          <span>{message}</span>
-          <button
-            className="icon-button"
-            aria-label="Скрыть сообщение"
-            onClick={() => setMessage("")}
-          >
-            <Icon name="close" size={18} />
-          </button>
-        </div>
-      )}
-      {state.errors?.message && (
-        <p className="notice">{state.errors.message}</p>
-      )}
-      <section className="reminders">
-        <header className="section-heading">
-          <h2>Напоминания</h2>
-          <span>{reminders.filter((r) => r.enabled).length} активных</span>
-        </header>
-        {!reminders.length ? (
-          <div className="empty-state">
-            <Icon name="bell" size={28} />
-            <h3>Освободите место в голове</h3>
-            <p>Скажите о деле — мы запомним его за вас.</p>
-          </div>
-        ) : (
-          reminders.map((r) => (
-            <article
-              className={"reminder " + (!r.enabled ? "paused" : "")}
-              key={r.id}
+    <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
+      <div className="planner-content">
+        {message && (
+          <div className="planner-notice" role="status">
+            <span>{message}</span>
+            <button
+              className="icon-button"
+              aria-label="Скрыть сообщение"
+              onClick={() => setMessage("")}
             >
-              <div className="reminder-top">
-                <div>
-                  <p className="repeat-label">{describe(r.schedule)}</p>
-                  <Clock
-                    value={
-                      r.nextTriggerAt
-                        ? shortTime(
-                            r.nextTriggerAt,
-                            r.schedule.timezoneMode === "fixed"
-                              ? r.schedule.timezone
-                              : zone(),
-                          )
-                        : r.schedule.times?.[0]
+              <Icon name="close" size={18} />
+            </button>
+          </div>
+        )}
+        {tab === "home" && (
+          <div className="home-layout">
+            <section className="voice-card">
+              <header>
+                <span
+                  className={
+                    "voice-status " +
+                    (["listening", "starting"].includes(voice) ? "live" : "")
+                  }
+                >
+                  <i />
+                  {voice === "listening"
+                    ? "Слушаю"
+                    : voice === "starting"
+                      ? "Включаю микрофон…"
+                      : voice === "processing"
+                        ? "Разбираю…"
+                        : editing
+                          ? "Редактирование"
+                          : "Ваше напоминание"}
+                </span>
+                <button
+                  className="icon-button mic-small"
+                  aria-label={
+                    ["listening", "starting"].includes(voice)
+                      ? "Остановить запись"
+                      : "Начать диктовку"
+                  }
+                  onClick={() =>
+                    ["listening", "starting"].includes(voice)
+                      ? recording.current?.stop()
+                      : listen()
+                  }
+                >
+                  <Icon
+                    name={
+                      ["listening", "starting"].includes(voice) ? "stop" : "mic"
                     }
                   />
-                </div>
-                <input
-                  className="toggle"
-                  type="checkbox"
-                  checked={r.enabled}
-                  aria-label={`Включить «${r.text}»`}
-                  onChange={async (e) => {
-                    try {
-                      setState(
-                        await putReminder({ ...r, enabled: e.target.checked }),
-                      );
-                    } catch (ex) {
-                      setMessage(ex.message);
-                    }
-                  }}
-                />
-              </div>
-              <h3>{r.text}</h3>
-              {r.schedule.kind !== "once" && r.enabled && (
+                </button>
+              </header>
+              {live && (
                 <button
-                  className="text-button"
-                  onClick={async () => {
-                    try {
-                      setState(await skipNext(r));
-                      setMessage("Ближайшее срабатывание пропущено");
-                    } catch (e) {
-                      setMessage(e.message);
-                    }
-                  }}
+                  className="transcript"
+                  aria-label="Полная расшифровка"
+                  onClick={() => setModal("transcript")}
+                  aria-live="polite"
                 >
-                  Пропустить ближайшее
+                  «{live}»
                 </button>
               )}
-              <footer>
-                <span>
-                  {r.enabled && r.nextTriggerAt
-                    ? "Ближайшее: " +
-                      new Intl.DateTimeFormat("ru-RU", {
-                        day: "numeric",
-                        month: "short",
-                      }).format(r.nextTriggerAt)
-                    : "Приостановлено / завершено"}
-                </span>
-                <div>
+              <label className="sr-only" htmlFor="event-text">
+                О чём напомнить
+              </label>
+              <textarea
+                id="event-text"
+                className="event-text"
+                rows={draft.text && draft.text.length < 30 ? 1 : 2}
+                value={draft.text}
+                placeholder="Скажите, что и когда напомнить…"
+                onChange={(e) => patch({ text: e.target.value })}
+              />
+              <div className="time-chips">
+                {draft.times.map((t) => (
                   <button
-                    className="icon-button"
-                    aria-label={`Изменить ${r.text}`}
+                    key={t}
+                    className="time-chip"
+                    aria-label={"Удалить время " + t}
                     onClick={() => {
-                      setDraft(r);
-                      setModal("editor");
+                      const times = draft.times.filter((x) => x !== t);
+                      patch({
+                        times,
+                        schedule:
+                          draft.schedule?.kind === "calendar"
+                            ? { ...draft.schedule, times }
+                            : draft.schedule,
+                      });
                     }}
                   >
-                    <Icon name="edit" size={20} />
+                    {t}
+                    <span>×</span>
+                  </button>
+                ))}
+              </div>
+              <p className="draft-caption">
+                {draft.schedule && draft.schedule.kind !== "dates"
+                  ? describe(draft.schedule)
+                  : draft.dates.length
+                    ? `${draft.dates.length} дат · ${draft.times.length} времён · ${draft.dates.length * draft.times.length} срабатываний`
+                    : "По умолчанию — сегодня."}
+              </p>
+              {draft.dateConflict && (
+                <div className="date-conflict" role="alert">
+                  <p>Названные даты отличаются от выбранных.</p>
+                  <button
+                    className="text-button"
+                    onClick={() =>
+                      patch({
+                        dateConflict: null,
+                        ...(draft.dateConflict.recurring
+                          ? {
+                              schedule: null,
+                              dates: draft.dateConflict.calendarDates,
+                            }
+                          : {}),
+                      })
+                    }
+                  >
+                    Оставить календарь
                   </button>
                   <button
-                    className="icon-button"
-                    aria-label={`Удалить ${r.text}`}
-                    onClick={async () => {
-                      if (confirm("Удалить напоминание «" + r.text + "»?")) {
-                        try {
-                          setState(await deleteReminder(r.id));
-                        } catch (e) {
-                          setMessage(e.message);
-                        }
-                      }
+                    className="text-button"
+                    onClick={() => {
+                      if (draft.dateConflict.recurring)
+                        patch({ dates: [], dateConflict: null });
+                      else
+                        patch({
+                          dates: [draft.dateConflict.spokenDate],
+                          schedule: draft.dateConflict.spokenSchedule || null,
+                          dateConflict: null,
+                        });
                     }}
                   >
-                    <Icon name="trash" size={20} />
+                    Использовать сказанное
                   </button>
                 </div>
-              </footer>
-            </article>
-          ))
+              )}
+              {draft.issues?.length > 0 && (
+                <p className="error">{draft.issues.join(". ")}</p>
+              )}
+              <div className="draft-tools">
+                <button
+                  className="text-button"
+                  onClick={() => setModal("repeat")}
+                >
+                  Повторение
+                </button>
+                <button
+                  className="text-button"
+                  onClick={() => setModal("time")}
+                >
+                  + Время
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label="Очистить черновик"
+                  onClick={newDraft}
+                >
+                  <Icon name="close" size={18} />
+                </button>
+                <button
+                  className="color-swatch"
+                  style={{ background: draft.color }}
+                  aria-label="Изменить цвет группы"
+                  onClick={() =>
+                    patch({
+                      color:
+                        COLORS[
+                          (COLORS.indexOf(draft.color) + 1) % COLORS.length
+                        ],
+                    })
+                  }
+                />
+              </div>
+            </section>
+            <div className="calendar-pane">
+              <Calendar
+                month={month}
+                onMonth={setMonth}
+                dates={
+                  draft.schedule && draft.schedule.kind !== "dates" ? [] : dates
+                }
+                onDate={pick}
+                occurrences={marks}
+                color={draft.color}
+              />
+              {draft.dates.length > 0 && (
+                <p className="selected-caption">
+                  {draft.dates.map(dateLabel).join(" · ")}
+                </p>
+              )}
+              {queue.length > 0 && (
+                <div className="queued">
+                  <strong>Черновики · {queue.length}</strong>
+                  {queue.map((r) => (
+                    <div key={r.id}>
+                      <i style={{ background: r.color }} />
+                      <span>
+                        {r.text} · {r.times.join(", ")}
+                      </span>
+                      <button
+                        className="icon-button"
+                        aria-label={"Удалить черновик " + r.text}
+                        onClick={() =>
+                          setQueue((q) => q.filter((x) => x.id !== r.id))
+                        }
+                      >
+                        <Icon name="close" size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="planner-actions">
+                <button
+                  className="secondary"
+                  disabled={busy || voice !== "idle"}
+                  onClick={add}
+                >
+                  Добавить
+                </button>
+                <button
+                  className="primary"
+                  disabled={busy || voice !== "idle"}
+                  onClick={save}
+                >
+                  {busy ? "Сохраняю…" : "Готово"}
+                </button>
+              </div>
+            </div>
+          </div>
         )}
-      </section>
-      <button
-        className="quota-bar"
-        onClick={() => {
-          setModal("subscription");
-          loadBill();
-        }}
-      >
-        <span>
-          {billingConfigured
-            ? `Подписка и лимит`
-            : `Бесплатно: ${Math.max(0, 10 - state.quota.used)} из 10 в этом месяце`}
-        </span>
-        <Icon name="arrow" size={18} />
-      </button>
-      {modal === "onboarding" && (
-        <Modal title="Давайте познакомимся">
+        {tab === "events" && (
+          <section className="agenda">
+            <header className="page-title">
+              <h1>События</h1>
+              <button
+                className="text-button"
+                onClick={() => {
+                  newDraft();
+                  setTab("home");
+                }}
+              >
+                + Добавить
+              </button>
+            </header>
+            <div className="agenda-month">
+              <button
+                className="icon-button"
+                aria-label="Предыдущий месяц"
+                onClick={() => setMonth(shiftMonth(month, -1))}
+              >
+                ‹
+              </button>
+              <span>
+                {new Intl.DateTimeFormat("ru-RU", {
+                  month: "long",
+                  year: "numeric",
+                }).format(new Date(month + "-01T12:00:00"))}
+              </span>
+              <button
+                className="icon-button"
+                aria-label="Следующий месяц"
+                onClick={() => setMonth(shiftMonth(month, 1))}
+              >
+                ›
+              </button>
+            </div>
+            {!entries.length && (
+              <div className="empty-agenda">
+                <Icon name="bell" size={32} />
+                <h2>Месяц без событий</h2>
+                <p>Выберите даты и продиктуйте напоминание на главной.</p>
+              </div>
+            )}
+            {eventDates.map((d) => (
+              <section className="agenda-day" key={d}>
+                <h2>
+                  {dateLabel(d)}
+                  {d === localDate() ? " · Сегодня" : ""}
+                </h2>
+                {entries
+                  .filter((e) => e.date === d)
+                  .map((e) => (
+                    <button
+                      key={e.id}
+                      className={
+                        "agenda-event " + (e.at < Date.now() ? "past" : "")
+                      }
+                      onClick={() => {
+                        const r = state.reminders.find(
+                          (r) => r.id === e.reminderId,
+                        );
+                        setEditing({ rule: r, event: e });
+                        setModal("event");
+                      }}
+                    >
+                      <i style={{ background: e.color }} />
+                      <time>{e.time}</time>
+                      <span>{e.text}</span>
+                      <span className="chevron">›</span>
+                    </button>
+                  ))}
+              </section>
+            ))}
+            {state.reminders.some((r) => !r.enabled) && (
+              <details className="paused">
+                <summary>Отключённые и завершённые группы</summary>
+                {state.reminders
+                  .filter((r) => !r.enabled)
+                  .map((r) => (
+                    <button
+                      className="agenda-event"
+                      key={r.id}
+                      onClick={() => {
+                        setEditing({ rule: r });
+                        setModal("event");
+                      }}
+                    >
+                      <i style={{ background: colorFor(r) }} />
+                      <span>{r.text}</span>
+                      <span>›</span>
+                    </button>
+                  ))}
+              </details>
+            )}
+          </section>
+        )}
+        {tab === "settings" && (
+          <section className="planner-settings">
+            <header className="page-title">
+              <h1>Настройки</h1>
+            </header>
+            <div className="settings-card">
+              <label className="field">
+                Как обращаться
+                <input
+                  value={settings.name}
+                  onChange={(e) => setting({ name: e.target.value })}
+                />
+              </label>
+              <Toggle
+                label="Слушать при открытии"
+                description="Только на главной, пока приложение открыто."
+                value={settings.autoListen}
+                onChange={(v) => setting({ autoListen: v })}
+              />
+              <label className="field">
+                Как напоминать
+                <select
+                  value={settings.mode}
+                  onChange={(e) => setting({ mode: e.target.value })}
+                >
+                  <option value="voiceAndNotification">
+                    Голосом и уведомлением
+                  </option>
+                  <option value="voice">Голосом</option>
+                  <option value="notification">Только уведомлением</option>
+                </select>
+              </label>
+              <Toggle
+                label="Звук уведомления"
+                value={settings.sound}
+                onChange={(v) => setting({ sound: v })}
+              />
+              <Toggle
+                label="Вибрация"
+                value={settings.vibration}
+                onChange={(v) => setting({ vibration: v })}
+              />
+              <Toggle
+                label="Напоминать до реакции"
+                value={settings.repeat}
+                onChange={(v) => setting({ repeat: v })}
+              />
+              {settings.repeat && (
+                <>
+                  <label className="field">
+                    Интервал повторов, минут
+                    <input
+                      type="number"
+                      min="1"
+                      value={settings.repeatMinutes}
+                      onChange={(e) =>
+                        +e.target.value > 0 &&
+                        setting({ repeatMinutes: +e.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    Максимум попыток, 0 — без ограничения
+                    <input
+                      type="number"
+                      min="0"
+                      value={settings.maxAttempts}
+                      onChange={(e) =>
+                        setting({ maxAttempts: Math.max(0, +e.target.value) })
+                      }
+                    />
+                  </label>
+                </>
+              )}
+              <Toggle
+                label="Ответ голосом"
+                description="По нажатию кнопки на экране напоминания."
+                value={settings.voiceAck}
+                onChange={(v) => setting({ voiceAck: v })}
+              />
+              <label className="field">
+                Слова подтверждения
+                <input
+                  value={settings.keywords}
+                  onChange={(e) => setting({ keywords: e.target.value })}
+                />
+              </label>
+              <Toggle
+                label="Скрывать текст на блокировке"
+                value={settings.privateNotification}
+                onChange={(v) => setting({ privateNotification: v })}
+              />
+              <label className="field">
+                Тема
+                <select
+                  value={settings.theme}
+                  onChange={(e) => setting({ theme: e.target.value })}
+                >
+                  <option value="system">Как на устройстве</option>
+                  <option value="light">Светлая</option>
+                  <option value="dark">Тёмная</option>
+                </select>
+              </label>
+            </div>
+            <div className="settings-card">
+              <h2>Доступ</h2>
+              <p>
+                {bill?.premium
+                  ? "Подписка активна"
+                  : active
+                    ? `Первый месяц бесплатно · осталось ${daysLeft} дн.`
+                    : "Пробный месяц завершён"}
+              </p>
+              <p className="hint">
+                Без ограничения числа напоминаний. После пробного месяца
+                создание и изменение — по подписке. Сохранённые напоминания
+                продолжают работать.
+              </p>
+              <button
+                className="secondary full"
+                onClick={() => setModal("access")}
+              >
+                Подписка и восстановление
+              </button>
+            </div>
+            <div className="settings-card">
+              <h2>Проверка телефона</h2>
+              {!isNative() && (
+                <p className="hint">
+                  Веб-версия — предпросмотр: срабатывания только пока вкладка
+                  открыта.
+                </p>
+              )}
+              <p className="hint">
+                Уведомления:{" "}
+                {{
+                  granted: "разрешены",
+                  denied: "не разрешены",
+                  default: "разрешение не запрошено",
+                  unsupported: "не поддерживаются",
+                }[perms?.notifications] || "проверяю"}
+                .{" "}
+                {isNative() &&
+                  `Точные будильники: ${perms?.exact ? "разрешены" : "нужно разрешение"}.`}
+              </p>
+              <button
+                className="secondary full"
+                onClick={() =>
+                  requestPermissions()
+                    .then(setPerms)
+                    .catch((e) => setMessage(e.message))
+                }
+              >
+                Проверить разрешения
+              </button>
+              <button
+                className="text-button full"
+                onClick={() =>
+                  speakName(
+                    (settings.name ? settings.name + "! " : "") +
+                      "Это проверка голоса.",
+                  ).catch((e) => setMessage(e.message))
+                }
+              >
+                Послушать голос
+              </button>
+              {state.errors?.message && (
+                <p className="error">{state.errors.message}</p>
+              )}
+              {state.recovery && (
+                <>
+                  <h3>После перезагрузки</h3>
+                  <p className="hint">Версия: {state.recovery.appVersion}</p>
+                  <p className="hint">
+                    Сигнал загрузки:{" "}
+                    {state.recovery.bootConfirmed
+                      ? "получен"
+                      : "не зарегистрирован"}
+                    .
+                  </p>
+                  <p className="hint">
+                    Последнее восстановление:{" "}
+                    {state.recovery.source === "app_resume"
+                      ? "при открытии приложения"
+                      : state.recovery.source || "—"}
+                    . Сигналов: {state.recovery.scheduled || 0}.
+                  </p>
+                  {state.recovery.bootConfirmed && (
+                    <p className="hint">
+                      При загрузке:{" "}
+                      {state.recovery.bootRestore?.completedAt
+                        ? "завершено"
+                        : "не завершено"}
+                      , сигналов {state.recovery.bootRestore?.scheduled || 0}.
+                    </p>
+                  )}
+                  {state.recovery.error && (
+                    <p className="error">{state.recovery.error}</p>
+                  )}
+                  <p className="hint">
+                    На MIUI разрешите фоновый автозапуск и отключите ограничения
+                    батареи для этого приложения.
+                  </p>
+                </>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
+      <nav className="tab-bar" aria-label="Основная навигация">
+        {[
+          ["home", "Главная"],
+          ["events", "События"],
+          ["settings", "Настройки"],
+        ].map(([id, label]) => (
+          <button
+            key={id}
+            aria-current={tab === id ? "page" : undefined}
+            onClick={() => {
+              setTab(id);
+              setMessage("");
+            }}
+          >
+            <NavIcon name={id} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+      {modal === "welcome" && (
+        <Modal title="Говорите — мы напомним">
           <p>
-            Как к вам обращаться? Напоминания будут начинаться с вашего имени.
+            Главная страница может сразу включать микрофон. Запись видна на
+            экране и прекращается при выходе из приложения. Аудио обрабатывается
+            системным речевым сервисом, который может использовать интернет.
           </p>
           <label className="field">
-            Ваше имя
+            Как к вам обращаться
             <input
-              autoComplete="given-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Например, Василий"
+              placeholder="Ваше имя, необязательно"
             />
           </label>
-          <button className="secondary full" onClick={listening ? stop : say}>
-            <Icon name="mic" />
-            {listening ? "Остановить" : "Назвать голосом"}
-          </button>
-          <button
-            className="text-button full"
-            onClick={() =>
-              speakName("Здравствуйте! Как к вам обращаться?").catch((e) =>
-                setMessage(e.message),
-              )
-            }
-          >
-            Послушать приветствие
-          </button>
           <p className="hint">
-            Микрофон включится только по вашему нажатию. Системное распознавание
-            может использовать интернет.
+            Первый месяц бесплатно, без ограничений. Без автоматических
+            списаний.
           </p>
           <button
             className="primary full"
             onClick={async () => {
-              await saveSettings({ name: name.trim(), onboarded: true });
+              await setting({ name, onboarded: true });
               setModal(null);
+              if (settings.autoListen) setTimeout(listen, 450);
             }}
           >
             Начать
           </button>
+        </Modal>
+      )}
+      {modal === "transcript" && (
+        <Modal title="Расшифровка" onClose={() => setModal(null)}>
+          <p>{live || draft.originalTranscript}</p>
+        </Modal>
+      )}
+      {modal === "time" && (
+        <Modal title="Добавить время" onClose={() => setModal(null)}>
+          <label className="field">
+            Время напоминания
+            <input
+              type="time"
+              value={time}
+              onChange={(e) => setTime(e.target.value)}
+            />
+          </label>
           <button
-            className="text-button full"
-            onClick={async () => {
-              await saveSettings({ name: "", onboarded: true });
+            className="primary full"
+            onClick={() => {
+              if (!time) return;
+              const times = [...new Set([...draft.times, time])].sort();
+              patch({
+                times,
+                schedule:
+                  draft.schedule?.kind === "calendar"
+                    ? { ...draft.schedule, times }
+                    : draft.schedule,
+              });
               setModal(null);
             }}
           >
-            Пропустить
+            Добавить время
           </button>
         </Modal>
       )}
-      {modal === "editor" && draft && (
+      {modal === "repeat" && (
         <EditReminder
-          initial={draft}
+          initial={{
+            ...draft,
+            schedule:
+              draft.schedule && draft.schedule.kind !== "dates"
+                ? draft.schedule
+                : {
+                    ...defaultSchedule(),
+                    kind: "calendar",
+                    times: draft.times.length ? draft.times : ["09:00"],
+                    anchorDate: dates[0],
+                  },
+          }}
           settings={settings}
-          busy={busy}
-          onSave={save}
-          onClose={() => {
+          busy={false}
+          onClose={() => setModal(null)}
+          onSave={async (r) => {
+            setDraft({
+              ...r,
+              dates: [],
+              times: r.schedule.times || [],
+              issues: [],
+              dateConflict: null,
+            });
             setModal(null);
-            setDraft(null);
           }}
         />
       )}
-      {modal === "settings" && (
-        <Modal title="Настройки" onClose={() => setModal(null)}>
-          <label className="field">
-            Как обращаться
-            <input
-              value={settings.name}
-              onChange={(e) => saveSettings({ name: e.target.value })}
-            />
-          </label>
-          <label className="field">
-            Как напоминать
-            <select
-              value={settings.mode}
-              onChange={(e) => saveSettings({ mode: e.target.value })}
-            >
-              <option value="notification">Только уведомление</option>
-              <option value="voice">Голосом</option>
-              <option value="voiceAndNotification">
-                Голосом и уведомлением
-              </option>
-            </select>
-          </label>
-          <Toggle
-            label="Звук уведомления"
-            value={settings.sound}
-            onChange={(v) => saveSettings({ sound: v })}
-          />
-          <Toggle
-            label="Вибрация"
-            value={settings.vibration}
-            onChange={(v) => saveSettings({ vibration: v })}
-          />
-          <Toggle
-            label="Напоминать до реакции"
-            value={settings.repeat}
-            onChange={(v) => saveSettings({ repeat: v })}
-          />
-          {settings.repeat && (
-            <>
-              <label className="field">
-                Повторять каждые, минут
-                <input
-                  type="number"
-                  min="1"
-                  max="1440"
-                  value={settings.repeatMinutes}
-                  onChange={(e) => {
-                    if (+e.target.value >= 1)
-                      saveSettings({ repeatMinutes: +e.target.value });
-                  }}
-                />
-              </label>
-              <label className="field">
-                Максимум попыток (0 — без ограничения)
-                <input
-                  type="number"
-                  min="0"
-                  max="1000"
-                  value={settings.maxAttempts}
-                  onChange={(e) =>
-                    saveSettings({ maxAttempts: Math.max(0, +e.target.value) })
-                  }
-                />
-              </label>
-              <p className="hint">
-                Энергосбережение Android может задерживать частые повторы. До
-                подтверждения напоминание не считается выполненным.
-              </p>
-            </>
+      {modal === "event" && editing?.rule && (
+        <Modal
+          title={editing.rule.text}
+          onClose={() => {
+            setEditing(null);
+            setModal(null);
+          }}
+        >
+          <p>{describe(editing.rule.schedule)}</p>
+          {editing.event && (
+            <p className="hint">
+              Выбрано: {dateLabel(editing.event.date)} · {editing.event.time}
+            </p>
           )}
-          <Toggle
-            label="Ответ голосом"
-            description="Кнопка на экране напоминания. Без скрытого прослушивания."
-            value={settings.voiceAck}
-            onChange={(v) => saveSettings({ voiceAck: v })}
-          />
-          <label className="field">
-            Слова подтверждения
-            <input
-              value={settings.keywords}
-              onChange={(e) => saveSettings({ keywords: e.target.value })}
-            />
-          </label>
-          <Toggle
-            label="Скрывать текст на блокировке"
-            value={settings.privateNotification}
-            onChange={(v) => saveSettings({ privateNotification: v })}
-          />
-          <label className="field">
-            Тема
-            <select
-              value={settings.theme}
-              onChange={(e) => saveSettings({ theme: e.target.value })}
+          <button
+            className="primary full"
+            onClick={() => {
+              editRule(editing.rule);
+              setModal(null);
+            }}
+          >
+            Изменить группу
+          </button>
+          {editing.event && editing.event.at > Date.now() && (
+            <button
+              className="secondary full"
+              onClick={async () => {
+                const r = editing.rule;
+                try {
+                  setState(await skipOccurrence(r.id, editing.event.at));
+                  setModal(null);
+                } catch (e) {
+                  setMessage(e.message);
+                }
+              }}
             >
-              <option value="system">Как на устройстве</option>
-              <option value="light">Светлая</option>
-              <option value="dark">Тёмная</option>
-            </select>
-          </label>
-          <Toggle
-            label="Щелчок выбора времени"
-            value={settings.pickerSound}
-            onChange={(v) => saveSettings({ pickerSound: v })}
-          />
+              Пропустить это срабатывание
+            </button>
+          )}
           <button
             className="secondary full"
-            onClick={() =>
-              requestPermissions()
-                .then(setPerms)
-                .catch((e) => setMessage(e.message))
-            }
+            onClick={async () => {
+              try {
+                if (editing.rule.enabled)
+                  setState(
+                    await putReminder({ ...editing.rule, enabled: false }),
+                  );
+                else await persist({ ...editing.rule, enabled: true });
+                setModal(null);
+              } catch (e) {
+                setMessage(e.message);
+              }
+            }}
           >
-            Проверить разрешения
+            {editing.rule.enabled ? "Приостановить группу" : "Включить группу"}
           </button>
           <button
-            className="secondary full"
-            onClick={() =>
-              speakName(
-                (settings.name ? settings.name + "! " : "") +
-                  "Это проверка голоса. Пора сделать перерыв.",
-              ).catch((e) => setMessage(e.message))
-            }
+            className="text-button full danger"
+            onClick={() => setModal("delete")}
           >
-            Послушать голос
+            Удалить группу
           </button>
-          {isNative() && state.recovery && (
-            <section aria-label="Диагностика перезагрузки">
-              <h3>После перезагрузки</h3>
-              <p className="hint">Версия: {state.recovery.appVersion}</p>
-              <p className="hint">
-                Сигнал загрузки в этой сессии телефона:{" "}
-                {state.recovery.bootConfirmed
-                  ? "получен"
-                  : state.recovery.currentBootCount < 0
-                    ? "не удалось проверить"
-                    : "не получен"}
-                .
-              </p>
-              <p className="hint">
-                Последнее восстановление:{" "}
-                {state.recovery.source === "app_resume"
-                  ? "при открытии приложения"
-                  : state.recovery.source || "ещё не запускалось"}
-                .
-                {state.recovery.completedAt
-                  ? ` Восстановлено сигналов: ${state.recovery.scheduled || 0}.`
-                  : state.recovery.startedAt
-                    ? " Не завершено."
-                    : ""}
-              </p>
-              {state.recovery.bootConfirmed && (
-                <p className="hint">
-                  Восстановление при загрузке:{" "}
-                  {state.recovery.bootRestore?.completedAt
-                    ? `завершено, сигналов: ${state.recovery.bootRestore.scheduled || 0}`
-                    : "не завершено"}
-                  .
-                  {state.recovery.bootRestore?.error
-                    ? ` Ошибка: ${state.recovery.bootRestore.error}`
-                    : ""}
-                </p>
-              )}
-              {state.recovery.error && (
-                <p className="error">{state.recovery.error}</p>
-              )}
-              <p className="hint">
-                Если сигнал загрузки не получен после перезагрузки, Android или
-                MIUI не запустили обработчик. Пришлите снимок этого раздела.
-                Открытие приложения восстановит расписание, но не заменяет
-                работу без запуска.
-              </p>
-            </section>
-          )}
-          <p className="hint">
-            Включение экрана не считается подтверждением. Автоматическое
-            прослушивание на блокировке не включено: Android ограничивает доступ
-            к микрофону.
-          </p>
         </Modal>
       )}
-      {modal === "subscription" && (
-        <Modal
-          title="Больше места для планов"
-          onClose={() => setModal(draft ? "editor" : null)}
-        >
+      {modal === "delete" && editing?.rule && (
+        <Modal title="Удалить всю группу?" onClose={() => setModal("event")}>
+          <p>Будут отменены все будущие срабатывания «{editing.rule.text}».</p>
+          <button
+            className="primary full"
+            onClick={async () => {
+              setState(await deleteReminder(editing.rule.id));
+              setModal(null);
+              setEditing(null);
+            }}
+          >
+            Удалить
+          </button>
+        </Modal>
+      )}
+      {modal === "access" && (
+        <Modal title="Первый месяц — бесплатно" onClose={() => setModal(null)}>
           <p>
-            10 новых напоминаний в календарный месяц бесплатно. Срабатывания и
-            повторные сигналы лимит не расходуют.
+            Все функции и любое количество напоминаний в течение месяца с
+            первого запуска. Затем — месячная или годовая подписка.
           </p>
-          <div className="summary">
-            <strong>
-              {bill?.premium
-                ? "Безлимит активен"
-                : `Осталось ${Math.max(0, 10 - (bill?.used ?? state.quota.used))} бесплатных`}
-            </strong>
-            <small>
-              После окончания подписки сохранённые напоминания продолжат
-              работать.
-            </small>
-          </div>
-          {!billingConfigured || bill?.configured === false ? (
+          <p className="hint">
+            Сохранённые напоминания не отключаются. Автоматических списаний нет.
+          </p>
+          {!billingConfigured || !bill?.configured ? (
             <p className="notice">
-              Оплата ещё не настроена владельцем приложения. Российский
-              эквайринг подключается через сервер; реальные цены появятся после
-              подключения. Это не действующая платная подписка.
+              В этой тестовой сборке эквайринг ещё не настроен. Настоящая оплата
+              недоступна.
             </p>
           ) : (
             <>
@@ -1428,106 +1270,70 @@ export default function App() {
                 Email для чека
                 <input
                   type="email"
-                  autoComplete="email"
-                  value={receiptEmail}
-                  onChange={(e) => setReceiptEmail(e.target.value)}
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
                 />
               </label>
               {["monthly", "yearly"].map((plan) => (
                 <button
-                  className="secondary full"
+                  className="primary full"
                   key={plan}
-                  onClick={async () => {
-                    try {
-                      await checkout(plan, receiptEmail);
-                      setMessage(
-                        "После оплаты вернитесь и нажмите «Проверить оплату».",
-                      );
-                    } catch (e) {
-                      setMessage(e.message);
-                    }
-                  }}
-                >
-                  {plan === "monthly" ? "На месяц" : "На год"}
-                  {bill?.prices?.[plan] ? " · " + bill.prices[plan] + " ₽" : ""}
-                </button>
-              ))}
-              <button className="primary full" onClick={loadBill}>
-                Проверить оплату
-              </button>
-              <details>
-                <summary>Восстановление доступа</summary>
-                <p className="hint">
-                  Сохраните ключ в менеджере паролей. Не отправляйте его другим
-                  людям: он даёт доступ к оплате и подписке.
-                </p>
-                <button
-                  className="text-button full"
-                  onClick={async () =>
-                    setDisplayKey((await recoveryKey()) || "")
+                  onClick={() =>
+                    checkout(plan, email).catch((e) => setMessage(e.message))
                   }
                 >
-                  Показать мой ключ
+                  {plan === "monthly" ? "Месяц" : "Год"} · {bill.prices[plan]} ₽
                 </button>
-                {displayKey && (
-                  <input
-                    type="text"
-                    readOnly
-                    value={displayKey}
-                    aria-label="Ваш ключ восстановления"
-                    onFocus={(e) => e.target.select()}
-                  />
-                )}
-                <label className="field">
-                  Ключ с прежнего устройства
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    value={restoreCode}
-                    onChange={(e) => setRestoreCode(e.target.value)}
-                  />
-                </label>
-                <button
-                  className="secondary full"
-                  onClick={async () => {
-                    try {
-                      setBill(await restoreKey(restoreCode));
-                      setRestoreCode("");
-                      setMessage("Доступ восстановлен");
-                    } catch (e) {
-                      setMessage(e.message);
-                    }
-                  }}
-                >
-                  Восстановить доступ
-                </button>
-              </details>
-              <p className="hint">
-                Предоплата без автоматического списания. Оплата на защищённой
-                странице российского платёжного сервиса.
-              </p>
+              ))}
+              <button
+                className="secondary full"
+                onClick={() =>
+                  billingStatus()
+                    .then(setBill)
+                    .catch((e) => setMessage(e.message))
+                }
+              >
+                Проверить оплату
+              </button>
+            </>
+          )}
+          {billingConfigured && (
+            <>
+              <button
+                className="text-button full"
+                onClick={() => recoveryKey().then(setKey)}
+              >
+                Показать ключ восстановления
+              </button>
+              <label className="field">
+                Ключ доступа
+                <input
+                  value={key || ""}
+                  onChange={(e) => setKey(e.target.value)}
+                  autoComplete="off"
+                />
+              </label>
+              <button
+                className="secondary full"
+                onClick={() =>
+                  restoreKey(key)
+                    .then(setBill)
+                    .catch((e) => setMessage(e.message))
+                }
+              >
+                Восстановить доступ
+              </button>
             </>
           )}
         </Modal>
       )}
-      {alarm && !modal && (
+      {alarm && (
         <AlarmBox
+          key={alarm.id}
           event={alarm}
           settings={settings}
-          onAck={async (source) => {
-            try {
-              setState(await acknowledge(alarm.id, source));
-            } catch (e) {
-              setMessage(e.message);
-            }
-          }}
-          onSnooze={async () => {
-            try {
-              setState(await snooze(alarm.id));
-            } catch (e) {
-              setMessage(e.message);
-            }
-          }}
+          onAck={(source) => acknowledge(alarm.id, source).then(setState)}
+          onSnooze={() => snooze(alarm.id).then(setState)}
         />
       )}
     </main>

@@ -117,8 +117,23 @@ export function defaultSchedule(now = new Date()) {
 }
 export function validateSchedule(s) {
   const errors = [];
-  if (!s || !["once", "calendar", "interval"].includes(s.kind))
+  if (!s || !["once", "dates", "calendar", "interval"].includes(s.kind))
     return ["Неизвестное расписание"];
+  if (s.kind === "dates") {
+    if (!s.dates?.length || s.dates.some((v) => !Number.isFinite(dateEpoch(v))))
+      errors.push("Выберите даты");
+    if (
+      !s.times?.length ||
+      s.times.some((v) => !/^([01]\d|2[0-3]):[0-5]\d$/.test(v))
+    )
+      errors.push("Укажите время");
+    try {
+      parts(new Date(), s.timezoneMode === "fixed" ? s.timezone : zone());
+    } catch {
+      errors.push("Некорректный часовой пояс");
+    }
+    return errors;
+  }
   if (s.kind === "once")
     return Number.isFinite(new Date(s.at).getTime())
       ? []
@@ -230,7 +245,7 @@ export function nextOccurrences(s, after = Date.now(), limit = 5) {
   if (validateSchedule(s).length) return [];
   if (s.kind === "once") {
     const t = new Date(s.at).getTime();
-    return t > after ? [t] : [];
+    return t > after && !s.excludedInstants?.includes(t) ? [t] : [];
   }
   const tz = s.timezoneMode === "fixed" ? s.timezone : zone(),
     out = [],
@@ -255,6 +270,21 @@ export function nextOccurrences(s, after = Date.now(), limit = 5) {
       if (!s.excludedInstants?.includes(t)) out.push(t);
     }
     return out;
+  }
+  if (s.kind === "dates") {
+    return [...new Set(s.dates)]
+      .flatMap((day) =>
+        [...new Set(s.times)].map((time) => zonedTime(day, time, tz)),
+      )
+      .filter(
+        (t) =>
+          Number.isFinite(t) &&
+          t > after &&
+          !s.excludedInstants?.includes(t) &&
+          !s.excludedDates?.includes(localDate(new Date(t), tz)),
+      )
+      .sort((a, b) => a - b)
+      .slice(0, limit);
   }
   const anchor = dateEpoch(s.anchorDate),
     start = s.count
@@ -300,6 +330,8 @@ export const shortTime = (t, tz = zone()) =>
     hourCycle: "h23",
   }).format(new Date(t));
 export function describe(s) {
+  if (s.kind === "dates")
+    return `${s.dates.length} дат · ${s.times.join(" · ")}`;
   if (s.kind === "once")
     return new Intl.DateTimeFormat("ru-RU", {
       day: "numeric",
