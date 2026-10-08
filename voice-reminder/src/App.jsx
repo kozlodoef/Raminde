@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startRecognition } from "./lib/speech.js";
+import { finishDictation } from "./lib/finish-dictation.js";
 import { primeAudio } from "./lib/alerts.js";
 import {
   defaults,
@@ -191,15 +192,18 @@ export default function App() {
   const recording = useRef(),
     draftRef = useRef(draft),
     mounted = useRef(true),
-    starting = useRef(false);
+    starting = useRef(false),
+    recognitionTask = useRef(null),
+    saving = useRef(false);
   draftRef.current = draft;
   useEffect(() => {
     localStorage.setItem("raminde.drafts.v3", JSON.stringify({ draft, queue }));
   }, [draft, queue]);
   const refresh = async () => {
+    if (saving.current) return;
     try {
       const s = await (isNative() ? getState() : fireWeb());
-      if (mounted.current) setState(s);
+      if (mounted.current && !saving.current) setState(s);
     } catch (e) {
       if (mounted.current) setMessage(e.message);
     }
@@ -249,8 +253,13 @@ export default function App() {
   const alarm = state?.events.find((e) =>
     ["ringing", "waiting"].includes(e.state),
   );
-  async function listen() {
-    if (starting.current || recording.current || document.hidden) return;
+  function listen() {
+    if (starting.current || recording.current || document.hidden || saving.current) return;
+    const task = runListen();
+    recognitionTask.current = task;
+    return task;
+  }
+  async function runListen() {
     starting.current = true;
     setVoice("starting");
     setMessage("");
@@ -267,9 +276,13 @@ export default function App() {
         setVoice("processing");
         const current = draftRef.current,
           p = parseGroup(text, current.dates);
-        setDraft({ ...current, ...p, color: current.color, id: current.id });
+        const parsed = { ...current, ...p, color: current.color, id: current.id };
+        draftRef.current = parsed;
+        setDraft(parsed);
         setLive(text);
+        return true;
       }
+      return false;
     } catch (e) {
       if (mounted.current)
         setMessage(
@@ -420,6 +433,9 @@ export default function App() {
     try {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
       const s = await putReminder(r, { reservation: token });
+      const stored = s?.reminders?.find((item) => item.id === r.id);
+      if (!stored || stored.enabled === false || !(Number(stored.nextTriggerAt) > Date.now()))
+        throw Error("Не удалось подтвердить сохранение и постановку сигнала. Напоминание осталось в черновике.");
       setState(s);
       if (token)
         try {
@@ -439,17 +455,24 @@ export default function App() {
     }
   }
   async function save() {
+    if (saving.current) return;
+    saving.current = true;
     setBusy(true);
-    recording.current?.stop();
     try {
-      if (starting.current || recording.current)
-        throw Error("Дождитесь завершения расшифровки");
+      if (starting.current || recording.current) {
+        const recognized = await finishDictation({
+          task: recognitionTask.current,
+          session: () => recording.current,
+        });
+        if (!recognized) throw Error("Речь не распознана. Повторите диктовку или введите напоминание вручную.");
+      }
+      const current = draftRef.current;
       const batch = [
         ...queue,
-        ...(draft.text.trim()
+        ...(current.text.trim()
           ? [
-              buildGroup(draft, Date.now(), {
-                allowPast: state?.reminders.some((r) => r.id === draft.id),
+              buildGroup(current, Date.now(), {
+                allowPast: state?.reminders.some((r) => r.id === current.id),
               }),
             ]
           : []),
@@ -462,21 +485,25 @@ export default function App() {
       for (const r of batch) {
         await persist(r);
         setQueue((q) => q.filter((x) => x.id !== r.id));
-        if (r.id === draft.id) {
-          setDraft(blank((state?.reminders.length || 0) + batch.length));
+        if (r.id === current.id) {
+          const fresh = blank((state?.reminders.length || 0) + batch.length);
+          draftRef.current = fresh;
+          setDraft(fresh);
           setLive("");
         }
       }
       setMessage(`Сохранено групп: ${batch.length}`);
       setEditing(null);
+      setModal("saved");
     } catch (e) {
       setMessage(
         e.message === "SUBSCRIPTION"
           ? "Пробный месяц закончился. Нужна подписка."
           : e.message,
       );
-      if (e.message === "SUBSCRIPTION") setModal("access");
+      setModal(e.message === "SUBSCRIPTION" ? "access" : "saveError");
     } finally {
+      saving.current = false;
       setBusy(false);
     }
   }
@@ -550,7 +577,7 @@ export default function App() {
                         ? "Разбираю…"
                         : editing
                           ? "Редактирование"
-                          : "Ваше напоминание"}
+                          : "Черновик напоминания"}
                 </span>
                 <button
                   className="icon-button mic-small"
@@ -701,7 +728,9 @@ export default function App() {
                 month={month}
                 onMonth={setMonth}
                 dates={
-                  draft.schedule && draft.schedule.kind !== "dates" ? [] : dates
+                  draft.schedule && draft.schedule.kind !== "dates"
+                    ? []
+                    : draft.dates.length || draft.text.trim() || live ? dates : []
                 }
                 onDate={pick}
                 occurrences={marks}
@@ -744,7 +773,7 @@ export default function App() {
                 </button>
                 <button
                   className="primary"
-                  disabled={busy || voice !== "idle"}
+                  disabled={busy}
                   onClick={save}
                 >
                   {busy ? "Сохраняю…" : "Готово"}
@@ -1106,6 +1135,21 @@ export default function App() {
           >
             Начать
           </button>
+        </Modal>
+      )}
+      {modal === "saved" && (
+        <Modal title="Напоминания сохранены" onClose={() => setModal(null)}>
+          <p>{message}. Сигналы поставлены в расписание. Цвет сохранённой группы не меняется при создании новой.</p>
+          <button className="primary full" onClick={() => { setModal(null); setTab("events"); }}>Открыть события</button>
+          <button className="secondary full" onClick={() => { setModal(null); if (settings.autoListen) setTimeout(listen, 100); }}>Новое напоминание</button>
+        </Modal>
+      )}
+      {modal === "saveError" && (
+        <Modal title="Напоминание не сохранено" onClose={() => setModal(null)}>
+          <p role="alert">{message}</p>
+          <p className="hint">Текст и выбранные даты остались в черновике. Пока сохранение не подтверждено, сигнал не поставлен.</p>
+          {isNative() && /Разрешите/.test(message) && <button className="secondary full" onClick={async () => { try { setPerms(await requestPermissions()); } catch (e) { setMessage(e.message); } }}>Проверить разрешения</button>}
+          <button className="primary full" onClick={() => setModal(null)}>Вернуться к черновику</button>
         </Modal>
       )}
       {modal === "transcript" && (
