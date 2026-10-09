@@ -8,14 +8,14 @@
 //
 // Наружу отдаём один и тот же контракт: startRecognition() → { promise, stop, abort }.
 // Статически нативные модули НЕ импортируем: в браузере они не нужны и грузились бы зря.
-import { isNative } from './native.js';
+import { isNative } from "./native.js";
 
 const DEMO_PHRASES = [
-  'Напомни мне завтра в семь утра полить цветы',
-  'Напомнить через два часа позвонить маме',
-  'Напомни в пятницу вечером купить подарок',
-  'Напомни 15 октября в 10 утра сдать отчёт',
-  'Напомни сегодня без четверти шесть забрать ребёнка из школы',
+  "Напомни мне завтра в семь утра полить цветы",
+  "Напомнить через два часа позвонить маме",
+  "Напомни в пятницу вечером купить подарок",
+  "Напомни 15 октября в 10 утра сдать отчёт",
+  "Напомни сегодня без четверти шесть забрать ребёнка из школы",
 ];
 
 export function demoPhrase() {
@@ -25,13 +25,13 @@ export function demoPhrase() {
 // ---------------------------------------------------------------- браузер ---
 
 function getRecognitionCtor() {
-  if (typeof window === 'undefined') return null;
+  if (typeof window === "undefined") return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
 }
 
 /** Доступен ли голосовой ввод в текущей среде. */
 export function isVoiceSupported() {
-  if (isNative()) return true;          // нативный плагин почти всегда доступен
+  if (isNative()) return true; // нативный плагин почти всегда доступен
   return !!getRecognitionCtor();
 }
 
@@ -39,11 +39,12 @@ export function isVoiceSupported() {
 export async function hasMicPermission() {
   if (!isNative()) return true;
   try {
-    const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
+    const { SpeechRecognition } =
+      await import("@capacitor-community/speech-recognition");
     const st = await SpeechRecognition.checkPermissions();
-    return st?.speechRecognition === 'granted';
+    return st?.speechRecognition === "granted";
   } catch (e) {
-    console.warn('Проверка разрешения не удалась:', e);
+    console.warn("Проверка разрешения не удалась:", e);
     return false;
   }
 }
@@ -52,86 +53,50 @@ export async function hasMicPermission() {
 export async function requestMicPermission() {
   if (!isNative()) return true;
   try {
-    const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
+    const { SpeechRecognition } =
+      await import("@capacitor-community/speech-recognition");
     const avail = await SpeechRecognition.available();
     if (!avail?.available) return false;
     const st = await SpeechRecognition.requestPermissions();
-    return st?.speechRecognition === 'granted';
+    return st?.speechRecognition === "granted";
   } catch (e) {
-    console.warn('Запрос разрешения не удался:', e);
+    console.warn("Запрос разрешения не удался:", e);
     return false;
   }
 }
 
 // ------------------------------------------------------------- нативный ---
 
-async function startNative({ lang, onInterim, onEnd, onError, onStart }) {
-  try {
-    const { SpeechRecognition } = await import('@capacitor-community/speech-recognition');
-
-    const avail = await SpeechRecognition.available();
-    if (!avail?.available) {
-      onError && onError('service-not-allowed');
-      return { promise: Promise.resolve(''), stop: () => {}, abort: () => {} };
-    }
-
-    const st = await SpeechRecognition.checkPermissions();
-    if (st?.speechRecognition !== 'granted') {
-      const req = await SpeechRecognition.requestPermissions();
-      if (req?.speechRecognition !== 'granted') {
-        onError && onError('not-allowed');
-        return { promise: Promise.resolve(''), stop: () => {}, abort: () => {} };
-      }
-    }
-
-    let finalText = '';
-    let settled = false;
-    let resolveFn;
-    const promise = new Promise((res) => { resolveFn = res; });
-
-    // popup: false обязателен — при popup: true событие partialResults на Android не приходит.
-    const partial = await SpeechRecognition.addListener('partialResults', (data) => {
-      const t = data?.matches?.[0] ?? '';
-      if (t) { finalText = t; onInterim && onInterim(t); }
-    });
-    const state = await SpeechRecognition.addListener('listeningState', (data) => {
-      if (data?.status === 'started') { onStart && onStart(); return; }
-      if (data?.status === 'stopped') {
-        onEnd && onEnd();
-        if (!settled) { settled = true; resolveFn(finalText.trim()); }
-      }
-    });
-
-    const cleanup = async () => {
-      try { await partial?.remove(); } catch (_) {}
-      try { await state?.remove(); } catch (_) {}
-    };
-
-    await SpeechRecognition.start({
-      language: lang || 'ru-RU',
-      maxResults: 1,
-      partialResults: true,
-      popup: false,
-    });
-
-    return {
-      promise,
-      stop: async () => {
-        try { await SpeechRecognition.stop(); } catch (_) {}
-        await cleanup();
-        if (!settled) { settled = true; resolveFn(finalText.trim()); }
-      },
-      abort: async () => {
-        try { await SpeechRecognition.stop(); } catch (_) {}
-        await cleanup();
-        if (!settled) { settled = true; resolveFn(''); }
-      },
-    };
-  } catch (e) {
-    console.warn('Нативное распознавание недоступно:', e);
-    onError && onError('service-not-allowed');
-    return { promise: Promise.resolve(''), stop: () => {}, abort: () => {} };
-  }
+async function startNative({ onInterim, onEnd, onError, onStart }) {
+  const { registerPlugin } = await import("@capacitor/core");
+  const engine = registerPlugin("ReminderEngine");
+  const partial = await engine.addListener("recognitionPartial", (e) =>
+    onInterim?.(e.text),
+  );
+  const state = await engine.addListener("recognitionState", (e) => {
+    if (e.status === "started") onStart?.();
+  });
+  let timer;
+  const cleanup = async () => {
+    clearTimeout(timer);
+    await partial.remove();
+    await state.remove();
+    onEnd?.();
+  };
+  const promise = engine
+    .recognize()
+    .then((r) => r.text || "")
+    .catch((e) => {
+      onError?.(e.message);
+      throw e;
+    })
+    .finally(cleanup);
+  timer = setTimeout(() => engine.abortRecognition().catch(() => {}), 30000);
+  return {
+    promise,
+    stop: () => engine.stopRecognition(),
+    abort: () => engine.abortRecognition(),
+  };
 }
 
 // ------------------------------------------------------------- браузерная ---
@@ -139,33 +104,37 @@ async function startNative({ lang, onInterim, onEnd, onError, onStart }) {
 function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
   const Ctor = getRecognitionCtor();
   if (!Ctor) {
-    return { promise: Promise.reject(new Error('unsupported')), stop: () => {}, abort: () => {} };
+    return {
+      promise: Promise.reject(new Error("unsupported")),
+      stop: () => {},
+      abort: () => {},
+    };
   }
   const rec = new Ctor();
-  rec.lang = lang || 'ru-RU';
+  rec.lang = lang || "ru-RU";
   rec.continuous = false;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
 
-  let finalText = '';
+  let finalText = "";
   let settled = false;
 
   const promise = new Promise((resolve, reject) => {
     rec.onstart = () => onStart && onStart();
     rec.onresult = (e) => {
-      let interim = '';
+      let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const t = e.results[i][0].transcript;
         if (e.results[i].isFinal) finalText += t;
         else interim += t;
       }
-      if (onInterim) onInterim((finalText + ' ' + interim).trim());
+      if (onInterim) onInterim((finalText + " " + interim).trim());
     };
     rec.onerror = (e) => {
       if (!settled) {
         settled = true;
         onError && onError(e.error);
-        reject(new Error(e.error || 'speech-error'));
+        reject(new Error(e.error || "speech-error"));
       }
     };
     rec.onend = () => {
@@ -185,17 +154,25 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
 
   return {
     promise,
-    stop: () => { try { rec.stop(); } catch (_) {} },
-    abort: () => { try { rec.abort(); } catch (_) {} },
+    stop: () => {
+      try {
+        rec.stop();
+      } catch (_) {}
+    },
+    abort: () => {
+      try {
+        rec.abort();
+      } catch (_) {}
+    },
   };
 }
 
-// ---------------------------------------------------------------------------- 
+// ----------------------------------------------------------------------------
 
 /**
  * Запускает одноразовое распознавание. Возвращает Promise<string>.
  * onInterim(text) — промежуточные результаты для живой расшифровки на экране.
  */
-export function startRecognition(opts = {}) {
+export async function startRecognition(opts = {}) {
   return isNative() ? startNative(opts) : startWeb(opts);
 }

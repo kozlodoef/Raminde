@@ -7,7 +7,7 @@ function ctx() {
   if (!audioCtx) {
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
   }
-  if (audioCtx.state === 'suspended') audioCtx.resume();
+  if (audioCtx.state === "suspended") audioCtx.resume();
   return audioCtx;
 }
 
@@ -23,13 +23,15 @@ export function playAlarm(loop = true) {
     const beep = (freq, at, dur) => {
       const o = c.createOscillator();
       const g = c.createGain();
-      o.type = 'square';
+      o.type = "square";
       o.frequency.value = freq;
       g.gain.setValueAtTime(0.0001, at);
       g.gain.exponentialRampToValueAtTime(1, at + 0.02);
       g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
-      o.connect(g); g.connect(master);
-      o.start(at); o.stop(at + dur + 0.05);
+      o.connect(g);
+      g.connect(master);
+      o.start(at);
+      o.stop(at + dur + 0.05);
     };
 
     let timer = null;
@@ -44,58 +46,67 @@ export function playAlarm(loop = true) {
     cycle();
     alarmNodes = { master, timer, ctx: c };
   } catch (e) {
-    console.warn('Не удалось воспроизвести звук:', e);
+    console.warn("Не удалось воспроизвести звук:", e);
   }
 }
 
 export function stopAlarm() {
   if (alarmNodes) {
     clearTimeout(alarmNodes.timer);
-    try { alarmNodes.master.disconnect(); } catch (_) {}
+    try {
+      alarmNodes.master.disconnect();
+    } catch (_) {}
     alarmNodes = null;
   }
 }
 
 /** Голосовое озвучивание текста (ru, если доступен). */
 export function speak(text, { rate = 0.95, pitch = 1, onend } = {}) {
-  if (!('speechSynthesis' in window)) { onend && onend(); return false; }
+  if (!("speechSynthesis" in window)) {
+    onend && onend();
+    return false;
+  }
   try {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'ru-RU';
+    u.lang = "ru-RU";
     u.rate = rate;
     u.pitch = pitch;
-    const ruVoice = window.speechSynthesis.getVoices().find(v => v.lang.startsWith('ru'));
+    const ruVoice = window.speechSynthesis
+      .getVoices()
+      .find((v) => v.lang.startsWith("ru"));
     if (ruVoice) u.voice = ruVoice;
     u.onend = () => onend && onend();
     window.speechSynthesis.speak(u);
     return true;
   } catch (e) {
-    console.warn('TTS недоступен:', e);
+    console.warn("TTS недоступен:", e);
     onend && onend();
     return false;
   }
 }
 
 export function cancelSpeech() {
-  if ('speechSynthesis' in window) {
-    try { window.speechSynthesis.cancel(); } catch (_) {}
+  if ("speechSynthesis" in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch (_) {}
   }
 }
 
 export function ttsAvailable() {
-  return 'speechSynthesis' in window;
+  return "speechSynthesis" in window;
 }
 
 /** Push-уведомления */
 export function pushSupported() {
-  return 'Notification' in window;
+  return "Notification" in window;
 }
 
 export async function requestPushPermission() {
-  if (!pushSupported()) return 'unsupported';
-  if (Notification.permission === 'granted') return 'granted';
-  if (Notification.permission === 'denied') return 'denied';
+  if (!pushSupported()) return "unsupported";
+  if (Notification.permission === "granted") return "granted";
+  if (Notification.permission === "denied") return "denied";
   try {
     return await Notification.requestPermission();
   } catch (_) {
@@ -104,30 +115,58 @@ export async function requestPushPermission() {
 }
 
 export function sendPush(title, body) {
-  if (!pushSupported() || Notification.permission !== 'granted') return false;
+  if (!pushSupported() || Notification.permission !== "granted") return false;
   try {
     const n = new Notification(title, {
       body,
-      icon: '/bell.svg',
-      badge: '/bell.svg',
-      tag: 'voice-reminder-' + Date.now(),
+      icon: "/bell.svg",
+      badge: "/bell.svg",
+      tag: "voice-reminder-" + Date.now(),
       requireInteraction: true,
     });
-    n.onclick = () => { window.focus(); n.close(); };
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
     return true;
   } catch (e) {
-    console.warn('Push не отправлен:', e);
+    console.warn("Push не отправлен:", e);
     return false;
   }
 }
 
 /** Разбудить аудио-контекст после первого жеста пользователя (требование браузеров). */
 export function primeAudio() {
-  document.addEventListener('pointerdown', once, { once: true });
-  document.addEventListener('keydown', once, { once: true });
+  document.addEventListener("pointerdown", once, { once: true });
+  document.addEventListener("keydown", once, { once: true });
   function once() {
-    try { ctx(); } catch (_) {}
+    try {
+      ctx();
+    } catch (_) {}
     // прогреваем TTS списком голосов
-    if ('speechSynthesis' in window) window.speechSynthesis.getVoices();
+    if ("speechSynthesis" in window) window.speechSynthesis.getVoices();
+  }
+}
+
+/** Short cue before recording; native Android uses ToneGenerator before SpeechRecognizer. */
+export async function playRecordingCue() {
+  try {
+    const c = ctx();
+    if (c.state !== "running") return;
+    const o = c.createOscillator(),
+      g = c.createGain();
+    o.type = "sine";
+    o.frequency.value = 880;
+    g.gain.setValueAtTime(0.0001, c.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.09, c.currentTime + 0.012);
+    g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + 0.1);
+    o.connect(g);
+    g.connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + 0.11);
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    g.disconnect();
+  } catch (_) {
+    /* Muted/blocked browser audio must not prevent recording. */
   }
 }
