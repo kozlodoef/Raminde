@@ -1,3 +1,4 @@
+import { assertDailyCapacity } from "./day-capacity.js";
 import { trialAccess, accessActive } from "./access.js";
 import { registerPlugin } from "@capacitor/core";
 import { isNative } from "../lib/native.js";
@@ -98,8 +99,15 @@ export async function setSettings(settings) {
   return saveWeb(s);
 }
 export async function putReminder(reminder, { reservation = null } = {}) {
-  if (isNative()) return Native.upsert({ reminder, reservation });
+  if (isNative()) {
+    const current = await Native.getState();
+    assertDailyCapacity(current.reminders || [], [reminder], {
+      events: current.events || [],
+    });
+    return Native.upsert({ reminder, reservation });
+  }
   const s = readWeb();
+  assertDailyCapacity(s.reminders, [reminder], { events: s.events });
   const existing = s.reminders.find((r) => r.id === reminder.id);
   const month = localDate(new Date(), s.quota.timezone).slice(0, 7);
   if (month !== s.quota.month) s.quota = { ...s.quota, month, used: 0 };

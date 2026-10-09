@@ -2,7 +2,9 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startRecognition } from "./lib/speech.js";
 import { finishDictation } from "./lib/finish-dictation.js";
-import { primeAudio } from "./lib/alerts.js";
+import { primeAudio, playRecordingCue } from "./lib/alerts.js";
+import Calendar from "./PlannerCalendar.jsx";
+import { assertDailyCapacity } from "./domain/day-capacity.js";
 import {
   defaults,
   getState,
@@ -30,7 +32,6 @@ import {
   colorFor,
   parseGroup,
   buildGroup,
-  monthBounds,
   occurrencesInMonth,
 } from "./domain/groups.js";
 import { accessActive } from "./domain/access.js";
@@ -53,6 +54,8 @@ import {
 } from "./ReminderControls.jsx";
 import "./planner.css";
 const uid = () => crypto.randomUUID();
+const eventCount = (n) =>
+  `${n} ${new Intl.PluralRules("ru").select(n) === "one" ? "событие" : new Intl.PluralRules("ru").select(n) === "few" ? "события" : "событий"}`;
 const blank = (index = 0) => ({
   id: uid(),
   text: "",
@@ -100,79 +103,8 @@ function NavIcon({ name }) {
     </svg>
   );
 }
-function Calendar({ month, onMonth, dates, onDate, occurrences, color }) {
-  const b = monthBounds(month),
-    days = Array.from({ length: b.offset + b.days }, (_, i) =>
-      i < b.offset ? null : month + "-" + pad(i - b.offset + 1),
-    ),
-    today = localDate();
-  return (
-    <section className="month-card" aria-label="Календарь">
-      <header>
-        <button
-          aria-label="Предыдущий месяц"
-          className="icon-button"
-          onClick={() => onMonth(shiftMonth(month, -1))}
-        >
-          ‹
-        </button>
-        <h2>
-          {new Intl.DateTimeFormat("ru-RU", {
-            month: "long",
-            year: "numeric",
-          }).format(new Date(month + "-01T12:00:00"))}
-        </h2>
-        <button
-          aria-label="Следующий месяц"
-          className="icon-button"
-          onClick={() => onMonth(shiftMonth(month, 1))}
-        >
-          ›
-        </button>
-      </header>
-      <div className="weekdays">
-        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((v) => (
-          <span key={v}>{v}</span>
-        ))}
-      </div>
-      <div className="days">
-        {days.map((d, i) => {
-          if (!d) return <span key={"empty" + i} />;
-          const dots = [
-            ...new Set(
-              occurrences.filter((e) => e.date === d).map((e) => e.color),
-            ),
-          ];
-          return (
-            <button
-              key={d}
-              className={
-                "day " +
-                (dates.includes(d) ? "selected " : "") +
-                (d === today ? "today" : "")
-              }
-              style={{ "--event": color }}
-              aria-label={dateLabel(d)}
-              aria-pressed={dates.includes(d)}
-              onClick={() => onDate(d)}
-            >
-              <span>{+d.slice(-2)}</span>
-              <span className="date-dots">
-                {dots.slice(0, 3).map((c) => (
-                  <i key={c} style={{ background: c }} />
-                ))}
-                {dots.length > 3 && <small>+</small>}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </section>
-  );
-}
 export default function App() {
   const [state, setState] = useState(null),
-    [activation, setActivation] = useState(0),
     [tab, setTab] = useState("home"),
     [month, setMonth] = useState(localDate().slice(0, 7)),
     [draft, setDraft] = useState(() => cachedDrafts().draft || blank()),
@@ -188,13 +120,15 @@ export default function App() {
     [time, setTime] = useState("09:00"),
     [email, setEmail] = useState(""),
     [key, setKey] = useState(""),
-    [editing, setEditing] = useState(null);
+    [editing, setEditing] = useState(null),
+    [dayFilter, setDayFilter] = useState(null);
   const recording = useRef(),
     draftRef = useRef(draft),
     mounted = useRef(true),
     starting = useRef(false),
     recognitionTask = useRef(null),
-    saving = useRef(false);
+    saving = useRef(false),
+    autoStarted = useRef(false);
   draftRef.current = draft;
   useEffect(() => {
     localStorage.setItem("raminde.drafts.v3", JSON.stringify({ draft, queue }));
@@ -223,7 +157,6 @@ export default function App() {
         recording.current?.abort();
         setVoice("idle");
       } else {
-        setActivation((n) => n + 1);
         refresh();
         permissions()
           .then(setPerms)
@@ -254,7 +187,14 @@ export default function App() {
     ["ringing", "waiting"].includes(e.state),
   );
   function listen() {
-    if (starting.current || recording.current || document.hidden || saving.current) return;
+    if (
+      starting.current ||
+      recording.current ||
+      document.hidden ||
+      saving.current
+    )
+      return;
+    autoStarted.current = true;
     const task = runListen();
     recognitionTask.current = task;
     return task;
@@ -265,6 +205,7 @@ export default function App() {
     setMessage("");
     setLive("");
     try {
+      if (!isNative()) await playRecordingCue();
       const session = await startRecognition({
         onStart: () => mounted.current && setVoice("listening"),
         onInterim: (t) => mounted.current && setLive(t),
@@ -276,7 +217,12 @@ export default function App() {
         setVoice("processing");
         const current = draftRef.current,
           p = parseGroup(text, current.dates);
-        const parsed = { ...current, ...p, color: current.color, id: current.id };
+        const parsed = {
+          ...current,
+          ...p,
+          color: current.color,
+          id: current.id,
+        };
         draftRef.current = parsed;
         setDraft(parsed);
         setLive(text);
@@ -299,18 +245,26 @@ export default function App() {
   useEffect(() => {
     if (tab !== "home" || alarm) {
       recording.current?.abort();
+      if (state?.settings.onboarded) autoStarted.current = true;
       return;
     }
-    if (!state?.settings.onboarded || !state.settings.autoListen || modal)
+    if (
+      autoStarted.current ||
+      !state?.settings.onboarded ||
+      !state.settings.autoListen ||
+      modal
+    )
       return;
-    const t = setTimeout(listen, 400);
+    const t = setTimeout(() => {
+      if (!autoStarted.current && !document.hidden) listen();
+    }, 400);
     return () => clearTimeout(t);
   }, [
     tab,
     !!alarm,
     state?.settings.onboarded,
     state?.settings.autoListen,
-    activation,
+    modal,
   ]);
   useEffect(() => {
     if (modal) recording.current?.abort();
@@ -397,7 +351,7 @@ export default function App() {
   }, [draft]);
   const marks = useMemo(
     () => [
-      ...entries,
+      ...entries.filter((e) => !preview || e.reminderId !== preview.id),
       ...occurrencesInMonth([...queue, ...(preview ? [preview] : [])], month),
     ],
     [entries, queue, preview, month],
@@ -411,6 +365,7 @@ export default function App() {
   };
   function newDraft() {
     recording.current?.abort();
+    setMessage("");
     setDraft(blank((state?.reminders.length || 0) + queue.length + 1));
     setLive("");
     setEditing(null);
@@ -423,7 +378,6 @@ export default function App() {
       setQueue((q) => [...q, r]);
       newDraft();
       setMessage("Добавлено в черновики. «Готово» сохранит все.");
-      setTimeout(listen, 100);
     } catch (e) {
       setMessage(e.message);
     }
@@ -434,8 +388,14 @@ export default function App() {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
       const s = await putReminder(r, { reservation: token });
       const stored = s?.reminders?.find((item) => item.id === r.id);
-      if (!stored || stored.enabled === false || !(Number(stored.nextTriggerAt) > Date.now()))
-        throw Error("Не удалось подтвердить сохранение и постановку сигнала. Напоминание осталось в черновике.");
+      if (
+        !stored ||
+        stored.enabled === false ||
+        !(Number(stored.nextTriggerAt) > Date.now())
+      )
+        throw Error(
+          "Не удалось подтвердить сохранение и постановку сигнала. Напоминание осталось в черновике.",
+        );
       setState(s);
       if (token)
         try {
@@ -464,7 +424,10 @@ export default function App() {
           task: recognitionTask.current,
           session: () => recording.current,
         });
-        if (!recognized) throw Error("Речь не распознана. Повторите диктовку или введите напоминание вручную.");
+        if (!recognized)
+          throw Error(
+            "Речь не распознана. Повторите диктовку или введите напоминание вручную.",
+          );
       }
       const current = draftRef.current;
       const batch = [
@@ -482,6 +445,7 @@ export default function App() {
         buildGroup(r, Date.now(), {
           allowPast: state.reminders.some((x) => x.id === r.id),
         });
+      assertDailyCapacity(state.reminders, batch, { events: state.events });
       for (const r of batch) {
         await persist(r);
         setQueue((q) => q.filter((x) => x.id !== r.id));
@@ -542,7 +506,10 @@ export default function App() {
   const trial = bill?.trialEndsAt || state.access?.trialEndsAt,
     active = bill ? bill.active : accessActive(state.access);
   const daysLeft = Math.max(0, Math.ceil((trial - Date.now()) / 86400000));
-  const eventDates = [...new Set(entries.map((e) => e.date))];
+  const shownEntries = dayFilter
+    ? entries.filter((e) => e.date === dayFilter)
+    : entries;
+  const eventDates = [...new Set(shownEntries.map((e) => e.date))];
   return (
     <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
       <div className="planner-content">
@@ -730,17 +697,21 @@ export default function App() {
                 dates={
                   draft.schedule && draft.schedule.kind !== "dates"
                     ? []
-                    : draft.dates.length || draft.text.trim() || live ? dates : []
+                    : draft.dates.length || draft.text.trim() || live
+                      ? dates
+                      : []
                 }
                 onDate={pick}
+                onOpenDay={(d) => {
+                  recording.current?.abort();
+                  setDayFilter(d);
+                  setTab("events");
+                  setMessage("");
+                }}
+                draftId={draft.id}
                 occurrences={marks}
                 color={draft.color}
               />
-              {draft.dates.length > 0 && (
-                <p className="selected-caption">
-                  {draft.dates.map(dateLabel).join(" · ")}
-                </p>
-              )}
               {queue.length > 0 && (
                 <div className="queued">
                   <strong>Черновики · {queue.length}</strong>
@@ -771,11 +742,7 @@ export default function App() {
                 >
                   Добавить
                 </button>
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={save}
-                >
+                <button className="primary" disabled={busy} onClick={save}>
                   {busy ? "Сохраняю…" : "Готово"}
                 </button>
               </div>
@@ -800,7 +767,10 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Предыдущий месяц"
-                onClick={() => setMonth(shiftMonth(month, -1))}
+                onClick={() => {
+                  setDayFilter(null);
+                  setMonth(shiftMonth(month, -1));
+                }}
               >
                 ‹
               </button>
@@ -813,15 +783,33 @@ export default function App() {
               <button
                 className="icon-button"
                 aria-label="Следующий месяц"
-                onClick={() => setMonth(shiftMonth(month, 1))}
+                onClick={() => {
+                  setDayFilter(null);
+                  setMonth(shiftMonth(month, 1));
+                }}
               >
                 ›
               </button>
             </div>
-            {!entries.length && (
+            {dayFilter && (
+              <div className="day-filter">
+                <strong>
+                  {dateLabel(dayFilter)} · {eventCount(shownEntries.length)}
+                </strong>
+                <button
+                  className="text-button"
+                  onClick={() => setDayFilter(null)}
+                >
+                  Весь месяц
+                </button>
+              </div>
+            )}
+            {!shownEntries.length && (
               <div className="empty-agenda">
                 <Icon name="bell" size={32} />
-                <h2>Месяц без событий</h2>
+                <h2>
+                  {dayFilter ? "В этот день нет событий" : "Месяц без событий"}
+                </h2>
                 <p>Выберите даты и продиктуйте напоминание на главной.</p>
               </div>
             )}
@@ -831,7 +819,7 @@ export default function App() {
                   {dateLabel(d)}
                   {d === localDate() ? " · Сегодня" : ""}
                 </h2>
-                {entries
+                {shownEntries
                   .filter((e) => e.date === d)
                   .map((e) => (
                     <button
@@ -855,7 +843,7 @@ export default function App() {
                   ))}
               </section>
             ))}
-            {state.reminders.some((r) => !r.enabled) && (
+            {!dayFilter && state.reminders.some((r) => !r.enabled) && (
               <details className="paused">
                 <summary>Отключённые и завершённые группы</summary>
                 {state.reminders
@@ -893,7 +881,7 @@ export default function App() {
               </label>
               <Toggle
                 label="Слушать при открытии"
-                description="Только на главной, пока приложение открыто."
+                description="Один раз при запуске. После перехода между вкладками — только кнопкой микрофона."
                 value={settings.autoListen}
                 onChange={(v) => setting({ autoListen: v })}
               />
@@ -1098,6 +1086,7 @@ export default function App() {
             aria-current={tab === id ? "page" : undefined}
             onClick={() => {
               setTab(id);
+              if (id === "events") setDayFilter(null);
               setMessage("");
             }}
           >
@@ -1112,6 +1101,11 @@ export default function App() {
             Главная страница может сразу включать микрофон. Запись видна на
             экране и прекращается при выходе из приложения. Аудио обрабатывается
             системным речевым сервисом, который может использовать интернет.
+          </p>
+          <p className="hint">
+            Нажмите на даты, чтобы выбрать дни. Удерживайте дату, чтобы увидеть
+            её события. После первого автостарта запись включается кнопкой
+            микрофона.
           </p>
           <label className="field">
             Как к вам обращаться
@@ -1130,7 +1124,6 @@ export default function App() {
             onClick={async () => {
               await setting({ name, onboarded: true });
               setModal(null);
-              if (settings.autoListen) setTimeout(listen, 450);
             }}
           >
             Начать
@@ -1138,18 +1131,63 @@ export default function App() {
         </Modal>
       )}
       {modal === "saved" && (
-        <Modal title="Напоминания сохранены" onClose={() => setModal(null)}>
-          <p>{message}. Сигналы поставлены в расписание. Цвет сохранённой группы не меняется при создании новой.</p>
-          <button className="primary full" onClick={() => { setModal(null); setTab("events"); }}>Открыть события</button>
-          <button className="secondary full" onClick={() => { setModal(null); if (settings.autoListen) setTimeout(listen, 100); }}>Новое напоминание</button>
+        <Modal
+          title="Напоминания сохранены"
+          onClose={() => {
+            setModal(null);
+            setMessage("");
+          }}
+        >
+          <p>
+            {message}. Сигналы поставлены в расписание. Цвет сохранённой группы
+            не меняется при создании новой.
+          </p>
+          <button
+            className="primary full"
+            onClick={() => {
+              setModal(null);
+              setMessage("");
+              setDayFilter(null);
+              setTab("events");
+            }}
+          >
+            Открыть события
+          </button>
+          <button
+            className="secondary full"
+            onClick={() => {
+              setModal(null);
+              setMessage("");
+            }}
+          >
+            Новое напоминание
+          </button>
         </Modal>
       )}
       {modal === "saveError" && (
         <Modal title="Напоминание не сохранено" onClose={() => setModal(null)}>
           <p role="alert">{message}</p>
-          <p className="hint">Текст и выбранные даты остались в черновике. Пока сохранение не подтверждено, сигнал не поставлен.</p>
-          {isNative() && /Разрешите/.test(message) && <button className="secondary full" onClick={async () => { try { setPerms(await requestPermissions()); } catch (e) { setMessage(e.message); } }}>Проверить разрешения</button>}
-          <button className="primary full" onClick={() => setModal(null)}>Вернуться к черновику</button>
+          <p className="hint">
+            Текст и выбранные даты остались в черновике. Пока сохранение не
+            подтверждено, сигнал не поставлен.
+          </p>
+          {isNative() && /Разрешите/.test(message) && (
+            <button
+              className="secondary full"
+              onClick={async () => {
+                try {
+                  setPerms(await requestPermissions());
+                } catch (e) {
+                  setMessage(e.message);
+                }
+              }}
+            >
+              Проверить разрешения
+            </button>
+          )}
+          <button className="primary full" onClick={() => setModal(null)}>
+            Вернуться к черновику
+          </button>
         </Modal>
       )}
       {modal === "transcript" && (

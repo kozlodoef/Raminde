@@ -593,3 +593,80 @@
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
 }
+
+/* Segmented event rims: saved colours are never painted over by a new draft. */
+.ring-day {
+  position: relative;
+  border-radius: 50%;
+  min-height: 46px;
+  touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.ring-day.selected {
+  background: transparent;
+  color: var(--text);
+}
+.ring-day.today > .date-number,
+.ring-day.selected.today > .date-number {
+  color: var(--blue);
+}
+.day-ring {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.date-number {
+  position: relative;
+  z-index: 1;
+}
+.draft-selection {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text);
+  bottom: 10px;
+  left: calc(50% - 2px);
+}
+.ring-day:hover {
+  box-shadow: none;
+  background: var(--surface);
+}
+.ring-day:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 1px;
+}
+.day-overflow {
+  position: absolute;
+  right: 5px;
+  bottom: 5px;
+}
+.calendar-help {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.4;
+  margin: 12px 8px 0;
+}
+.day-filter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 8px 0 16px;
+  font-size: 15px;
+}
+@media (max-width: 350px) {
+  .month-card {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+  .day-ring {
+    width: 42px;
+    height: 42px;
+  }
+}
