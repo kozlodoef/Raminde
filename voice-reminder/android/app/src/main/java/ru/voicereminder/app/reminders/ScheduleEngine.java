@@ -16,6 +16,12 @@ public final class ScheduleEngine {
    ZoneId zone=s.optString("timezoneMode").equals("fixed")?ZoneId.of(s.getString("timezone")):ZoneId.systemDefault();
    LocalDate anchor=LocalDate.parse(s.getString("anchorDate")),until=s.isNull("until")||s.optString("until").isEmpty()?LocalDate.MAX:LocalDate.parse(s.getString("until"));long count=s.optLong("count",0);JSONArray excludes=s.optJSONArray("excludedDates");
    if(kind.equals("interval")){long start=Instant.parse(s.getString("startAt")).toEpochMilli(),step=s.getLong("intervalMinutes")*60000;if(step<60000)return 0;long index=Math.max(0,(after-start)/step+1);for(int n=0;n<100000;n++,index++){if(count>0&&index>=count)return 0;long t=start+index*step;ZonedDateTime z=Instant.ofEpochMilli(t).atZone(zone);if(z.toLocalDate().isAfter(until))return 0;String hm=z.toLocalTime().toString().substring(0,5);if(!s.optString("windowStart").isEmpty()&&hm.compareTo(s.getString("windowStart"))<0||!s.optString("windowEnd").isEmpty()&&hm.compareTo(s.getString("windowEnd"))>0||contains(excludes,z.toLocalDate().toString()))continue;if(!excluded(s,t))return t;}return 0;}
+   JSONArray specific=s.optJSONArray("specificDates");
+   if(populated(specific)){
+    TreeSet<String> dates=new TreeSet<>(),times=new TreeSet<>();for(int i=0;i<specific.length();i++)dates.add(specific.optString(i));for(int i=0;i<s.optJSONArray("times").length();i++)times.add(s.optJSONArray("times").optString(i));int emitted=0;
+    for(String date:dates){LocalDate day=LocalDate.parse(date);if(day.isAfter(until)||contains(excludes,date))continue;for(String time:times){long t=wall(day,time,zone);if(t<=after||excluded(s,t))continue;if(count>0&&++emitted>count)return 0;return t;}}
+    return 0;
+   }
    long step=Math.max(1,s.optLong("interval",1)),emitted=0;String frequency=s.optString("frequency","daily");LocalDate start=count>0?anchor:Instant.ofEpochMilli(after).atZone(zone).toLocalDate();if(start.isBefore(anchor))start=anchor;
    TreeSet<String> times=new TreeSet<>();JSONArray ts=s.getJSONArray("times");for(int i=0;i<ts.length();i++)times.add(ts.getString(i));
    LocalDate anchorMonday=anchor.minusDays(anchor.getDayOfWeek().getValue()-1);

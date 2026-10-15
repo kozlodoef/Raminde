@@ -108,6 +108,7 @@ export function defaultSchedule(now = new Date()) {
     excludedDates: [],
     excludedInstants: [],
     excludedWeekdays: [],
+    specificDates: [],
     until: null,
     count: null,
     ordinal: null,
@@ -181,6 +182,8 @@ export function validateSchedule(s) {
     errors.push("Количество повторов должно быть положительным");
   if ((s.excludedDates || []).some((d) => !Number.isFinite(dateEpoch(d))))
     errors.push("Некорректная дата исключения");
+  if ((s.specificDates || []).some((d) => !Number.isFinite(dateEpoch(d))))
+    errors.push("Некорректная указанная дата");
   try {
     parts(new Date(), s.timezoneMode === "fixed" ? s.timezone : zone());
   } catch {
@@ -256,6 +259,27 @@ export function nextOccurrences(s, after = Date.now(), limit = 5) {
     }
     return out;
   }
+  if (s.specificDates?.length) {
+    const times = [...new Set(s.times)].sort(),
+      dates = [...new Set(s.specificDates)].sort(),
+      emitted = [];
+    for (const ds of dates) {
+      if (s.excludedDates?.includes(ds)) continue;
+      for (const time of times) {
+        const t = zonedTime(ds, time, tz);
+        if (
+          !Number.isFinite(t) ||
+          t <= after ||
+          s.excludedInstants?.includes(t)
+        )
+          continue;
+        emitted.push(t);
+        if (s.count && emitted.length >= s.count) return emitted.slice(0, limit);
+        if (emitted.length >= limit) return emitted;
+      }
+    }
+    return emitted;
+  }
   const anchor = dateEpoch(s.anchorDate),
     start = s.count
       ? anchor
@@ -308,6 +332,8 @@ export function describe(s) {
     }).format(new Date(s.at));
   if (s.kind === "interval")
     return `Каждые ${s.intervalMinutes} мин${s.windowStart ? " · " + s.windowStart + "–" + s.windowEnd : ""}`;
+  if (s.specificDates?.length)
+    return `Указанные даты: ${s.specificDates.join(", ")}`;
   const wd = ["", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
   let text = {
     daily: +s.interval === 1 ? "Каждый день" : `Раз в ${s.interval} дней`,

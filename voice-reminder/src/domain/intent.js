@@ -29,6 +29,111 @@ const MONTHS = [
   "ноябр",
   "декабр",
 ];
+const MONTH_WORDS = [
+  ["январ", 1],
+  ["феврал", 2],
+  ["март", 3],
+  ["апрел", 4],
+  ["ма[йяе]", 5],
+  ["июн", 6],
+  ["июл", 7],
+  ["август", 8],
+  ["сентябр", 9],
+  ["октябр", 10],
+  ["ноябр", 11],
+  ["декабр", 12],
+];
+
+function monthPattern() {
+  return MONTH_WORDS.map(([word]) => word).join("|");
+}
+
+function makeSpecificDate(year, month, day, now) {
+  const explicitYear = year != null;
+  year ??= now.getFullYear();
+  const date = new Date(year, month - 1, day, 12);
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  )
+    return null;
+  if (!explicitYear) {
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 12);
+    if (date < today) {
+      date.setFullYear(year + 1);
+      if (date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+    }
+  }
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function monthNumber(word) {
+  const index = MONTH_WORDS.findIndex(([pattern]) =>
+    new RegExp(`^${pattern}`, "iu").test(word),
+  );
+  return index < 0 ? 0 : MONTH_WORDS[index][1];
+}
+
+// Extract two or more explicitly named dates without turning them into a
+// long materialized series. The returned replacement leaves the time/action
+// for the normal parser and stores only the finite date set in the rule.
+function extractSpecificDates(phrase, now) {
+  const source = String(phrase || "").toLowerCase().replaceAll("ё", "е");
+  const spans = [];
+  const dates = [];
+  const add = (start, end, day, monthWord, year) => {
+    const month = monthNumber(monthWord);
+    if (!month || day < 1 || day > 31) return;
+    const iso = makeSpecificDate(year, month, day, now);
+    dates.push(iso);
+  };
+  const month = monthPattern();
+  const grouped = new RegExp(
+    `(?<!\\d)((?:\\d{1,2}(?:-?го)?\\s*(?:,|и)\\s*)+\\d{1,2}(?:-?го)?)\\s+(${month})(?:[а-яё]*)?(?:\\s+(\\d{4}))?`,
+    "giu",
+  );
+  for (const match of source.matchAll(grouped)) {
+    const numbers = [...match[1].matchAll(/\d{1,2}/g)].map((m) => +m[0]);
+    const monthWord = match[2];
+    const year = match[3] ? +match[3] : null;
+    for (const day of numbers) add(match.index, match.index + match[0].length, day, monthWord, year);
+    spans.push([match.index, match.index + match[0].length]);
+  }
+  const named = new RegExp(
+    `(\\d{1,2})(?:-?го)?\\s+(${month})(?:[а-яё]*)?(?:\\s+(\\d{4}))?`,
+    "giu",
+  );
+  for (const match of source.matchAll(named)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (spans.some(([a, b]) => start >= a && end <= b)) continue;
+    add(start, end, +match[1], match[2], match[3] ? +match[3] : null);
+  }
+  const numeric = /\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b/giu;
+  for (const match of source.matchAll(numeric)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    const year = match[3]
+      ? (+match[3] < 100 ? 2000 + +match[3] : +match[3])
+      : null;
+    const date = makeSpecificDate(year, +match[2], +match[1], now);
+    dates.push(date);
+    spans.push([start, end]);
+  }
+  const unique = [...new Set(dates.filter(Boolean))].sort();
+  if (dates.length < 2) return null;
+  let cleaned = source;
+  for (const match of source.matchAll(named)) {
+    const start = match.index, end = start + match[0].length;
+    if (!spans.some(([a, b]) => start >= a && end <= b)) spans.push([start, end]);
+  }
+  for (const [start, end] of spans.sort((a, b) => b[0] - a[0]))
+    cleaned = cleaned.slice(0, start) + " " + cleaned.slice(end);
+  cleaned = cleaned.replace(/(?:\s|,)+(?:и(?:\s|,)+)?(?=(?:в|у)\s)/giu, " ");
+  return { dates: unique, cleaned, invalid: dates.some((d) => !d) };
+}
+
 export function parseIntent(phrase, now = new Date()) {
   const s = defaultSchedule(now),
     issues = [];
@@ -168,11 +273,23 @@ export function parseIntent(phrase, now = new Date()) {
     );
     rest = rest.replace(multiple[0], `в ${s.times[0]}`);
   }
-  const parsed = parseReminder(rest.replace(/\s+/g, " ").trim(), now);
+  const specific = !recurring ? extractSpecificDates(phrase, now) : null;
+  const parsed = parseReminder(
+    (specific?.cleaned || rest).replace(/\s+/g, " ").trim(),
+    now,
+  );
   if (parsed.error) issues.push(parsed.error);
   if (!parsed.timeFound && s.kind !== "interval")
     issues.push("Уточните время напоминания");
-  if (!recurring && parsed.when) {
+  if (specific) {
+    s.kind = "calendar";
+    s.frequency = "daily";
+    s.anchorDate = specific.dates[0] || localDate(now);
+    s.specificDates = specific.dates;
+    if (specific.invalid) issues.push("В списке есть несуществующая дата — исправьте даты");
+    if (parsed.timeFound)
+      s.times = [`${pad(parsed.when.getHours())}:${pad(parsed.when.getMinutes())}`];
+  } else if (!recurring && parsed.when) {
     s.at = parsed.when.toISOString();
     if (parsed.when <= now)
       issues.push("Указанное время уже прошло — выберите новую дату");

@@ -475,35 +475,57 @@ function EditReminder({
       )}
       {s.kind === "calendar" && (
         <>
-          <label className="field">
-            Повторять
-            <select
-              value={s.frequency}
-              onChange={(e) =>
-                update({
-                  frequency: e.target.value,
-                  weekdays:
-                    e.target.value === "weekly" && !s.weekdays.length
-                      ? [1]
-                      : s.weekdays,
-                  monthDays:
-                    ["monthly", "yearly"].includes(e.target.value) &&
-                    !s.monthDays.length
-                      ? [new Date().getDate()]
-                      : s.monthDays,
-                  months:
-                    e.target.value === "yearly" && !s.months.length
-                      ? [new Date().getMonth() + 1]
-                      : s.months,
-                })
-              }
-            >
-              <option value="daily">По дням</option>
-              <option value="weekly">По дням недели</option>
-              <option value="monthly">По числам месяца</option>
-              <option value="yearly">По месяцам года</option>
-            </select>
-          </label>
+          {s.specificDates?.length ? (
+            <>
+              <label className="field">
+                Указанные даты (YYYY-MM-DD)
+                <input
+                  value={s.specificDates.join(", ")}
+                  onChange={(e) =>
+                    update({
+                      specificDates: e.target.value
+                        .split(/[, ]+/)
+                        .filter(Boolean),
+                    })
+                  }
+                />
+              </label>
+              <p className="hint">
+                Это несколько отдельных дат одного напоминания. Новые даты не
+                создаются автоматически.
+              </p>
+            </>
+          ) : (
+            <label className="field">
+              Повторять
+              <select
+                value={s.frequency}
+                onChange={(e) =>
+                  update({
+                    frequency: e.target.value,
+                    weekdays:
+                      e.target.value === "weekly" && !s.weekdays.length
+                        ? [1]
+                        : s.weekdays,
+                    monthDays:
+                      ["monthly", "yearly"].includes(e.target.value) &&
+                      !s.monthDays.length
+                        ? [new Date().getDate()]
+                        : s.monthDays,
+                    months:
+                      e.target.value === "yearly" && !s.months.length
+                        ? [new Date().getMonth() + 1]
+                        : s.months,
+                  })
+                }
+              >
+                <option value="daily">По дням</option>
+                <option value="weekly">По дням недели</option>
+                <option value="monthly">По числам месяца</option>
+                <option value="yearly">По месяцам года</option>
+              </select>
+            </label>
+          )}
           <label className="field">
             Шаг повторения
             <input
@@ -514,7 +536,7 @@ function EditReminder({
               onChange={(e) => update({ interval: +e.target.value })}
             />
           </label>
-          <div className="weekdays" aria-label="Дни недели">
+          {!s.specificDates?.length && <div className="weekdays" aria-label="Дни недели">
             {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((w, i) => (
               <button
                 key={w}
@@ -531,24 +553,26 @@ function EditReminder({
                 {w}
               </button>
             ))}
-          </div>
-          {list("monthDays", "Числа месяца (пусто — любой день)", 1, 31)}
-          {list("months", "Месяцы (пусто — любой месяц)", 1, 12)}
-          <label className="field">
-            Чётность чисел
-            <select
-              value={s.dayParity}
-              onChange={(e) => update({ dayParity: e.target.value })}
-            >
-              <option value="any">Любая</option>
-              <option value="even">Чётные числа</option>
-              <option value="odd">Нечётные числа</option>
-            </select>
-          </label>
-          <p className="hint">
-            Дни, числа, месяцы и чётность сочетаются вместе. Отсутствующее число
-            месяца пропускается.
-          </p>
+          </div>}
+          {!s.specificDates?.length && <>
+            {list("monthDays", "Числа месяца (пусто — любой день)", 1, 31)}
+            {list("months", "Месяцы (пусто — любой месяц)", 1, 12)}
+            <label className="field">
+              Чётность чисел
+              <select
+                value={s.dayParity}
+                onChange={(e) => update({ dayParity: e.target.value })}
+              >
+                <option value="any">Любая</option>
+                <option value="even">Чётные числа</option>
+                <option value="odd">Нечётные числа</option>
+              </select>
+            </label>
+            <p className="hint">
+              Дни, числа, месяцы и чётность сочетаются вместе. Отсутствующее число
+              месяца пропускается.
+            </p>
+          </>}
         </>
       )}
       {s.kind === "interval" && (

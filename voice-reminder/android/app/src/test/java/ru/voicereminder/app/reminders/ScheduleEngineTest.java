@@ -10,6 +10,7 @@ public class ScheduleEngineTest {
  @Test public void oddMonthBoundary()throws Exception{JSONObject s=base().put("dayParity","odd");long first=ScheduleEngine.next(s,at("2027-01-30T23:00:00Z"));assertEquals(at("2027-01-31T09:00:00Z"),first);assertEquals(at("2027-02-01T09:00:00Z"),ScheduleEngine.next(s,first));}
  @Test public void lastFriday()throws Exception{assertEquals(at("2026-10-30T09:00:00Z"),ScheduleEngine.next(base().put("frequency","monthly").put("ordinal",-1).put("weekday",5),at("2026-10-07T12:00:00Z")));}
  @Test public void countEnds()throws Exception{assertEquals(0,ScheduleEngine.next(base().put("count",2),at("2026-10-07T12:00:00Z")));}
+ @Test public void specificDatesStayFinite()throws Exception{JSONObject s=base().put("specificDates",new JSONArray("[\"2026-10-15\",\"2026-10-20\"]")).put("times",new JSONArray("[\"10:00\"]"));assertEquals(at("2026-10-15T10:00:00Z"),ScheduleEngine.next(s,at("2026-10-07T00:00:00Z")));assertEquals(at("2026-10-20T10:00:00Z"),ScheduleEngine.next(s,at("2026-10-15T10:00:01Z")));assertEquals(0,ScheduleEngine.next(s,at("2026-10-21T00:00:00Z")));}
  @Test public void gap()throws Exception{assertEquals(at("2026-03-29T01:00:00Z"),ScheduleEngine.next(base().put("anchorDate","2026-03-29").put("timezone","Europe/Berlin").put("times",new JSONArray("[\"02:30\"]")),at("2026-03-29T00:00:00Z")));}
  @Test public void overlap()throws Exception{assertEquals(at("2026-10-25T00:30:00Z"),ScheduleEngine.next(base().put("timezone","Europe/Berlin").put("times",new JSONArray("[\"02:30\"]")),at("2026-10-25T00:00:00Z")));}
 }

@@ -300,3 +300,23 @@ test("multiple times in one recurring rule stay one reminder", () => {
     1,
   );
 });
+test("several explicitly named dates stay a finite date set", () => {
+  const r = parseIntents(
+    "Напомни 15 и 20 октября в 10 позвонить врачу",
+    now,
+  )[0];
+  assert.equal(r.text, "Позвонить врачу");
+  assert.deepEqual(r.issues, []);
+  assert.deepEqual(r.schedule.specificDates, ["2026-10-15", "2026-10-20"]);
+  assert.deepEqual(
+    iso(r.schedule, 10).slice(0, 2),
+    ["2026-10-15T06:00:00.000Z", "2026-10-20T06:00:00.000Z"],
+  );
+});
+test("invalid date in a finite date set asks for correction", () => {
+  const r = parseIntents(
+    "Напомни 31 февраля 2027 и 20 марта 2027 в 10 позвонить врачу",
+    now,
+  )[0];
+  assert.ok(r.issues.some((issue) => issue.includes("несуществующая дата")));
+});
