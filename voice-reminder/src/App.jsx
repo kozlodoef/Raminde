@@ -9,7 +9,7 @@ import {
   sendPush,
   primeAudio,
 } from "./lib/alerts.js";
-import { parseIntent } from "./domain/intent.js";
+import { parseIntents } from "./domain/intent.js";
 import {
   defaultSchedule,
   describe,
@@ -306,7 +306,14 @@ function TimeWheel({ value, onChange }) {
     </div>
   );
 }
-function EditReminder({ initial, onSave, onClose, busy, settings }) {
+function EditReminder({
+  initial,
+  onSave,
+  onClose,
+  busy,
+  settings,
+  queueSize = 1,
+}) {
   const [text, setText] = useState(initial.text || ""),
     [s, setS] = useState(initial.schedule || defaultSchedule()),
     [error, setError] = useState(""),
@@ -395,6 +402,12 @@ function EditReminder({ initial, onSave, onClose, busy, settings }) {
     >
       {initial.originalTranscript && (
         <p className="transcript">«{initial.originalTranscript}»</p>
+      )}
+      {queueSize > 1 && (
+        <p className="notice">
+          В этой фразе найдено напоминаний: {queueSize}. Каждое сохранится
+          отдельным правилом и расходует 1 единицу месячного лимита.
+        </p>
       )}
       {remainingIssues.length > 0 && (
         <p className="notice">
@@ -839,7 +852,7 @@ export default function App() {
   const [state, setState] = useState(null),
     [perms, setPerms] = useState(null),
     [modal, setModal] = useState(null),
-    [draft, setDraft] = useState(null),
+    [drafts, setDrafts] = useState([]),
     [listening, setListening] = useState(false),
     [live, setLive] = useState(""),
     [message, setMessage] = useState(""),
@@ -918,7 +931,7 @@ export default function App() {
         setName(text.replace(/[.!?]/g, ""));
         return;
       }
-      setDraft(parseIntent(text));
+      setDrafts(parseIntents(text));
       setModal("editor");
     } catch (e) {
       setMessage(
@@ -967,8 +980,6 @@ export default function App() {
           );
         }
       }
-      setModal(null);
-      setDraft(null);
       setMessage("Напоминание сохранено и запланировано");
     } catch (e) {
       if (token && !saved) await releaseQuota(token).catch(() => {});
@@ -1091,7 +1102,7 @@ export default function App() {
         <button
           className="text-button"
           onClick={() => {
-            setDraft({ text: "", schedule: defaultSchedule() });
+            setDrafts([{ text: "", schedule: defaultSchedule() }]);
             setModal("editor");
           }}
         >
@@ -1198,7 +1209,7 @@ export default function App() {
                     className="icon-button"
                     aria-label={`Изменить ${r.text}`}
                     onClick={() => {
-                      setDraft(r);
+                      setDrafts([r]);
                       setModal("editor");
                     }}
                   >
@@ -1291,15 +1302,24 @@ export default function App() {
           </button>
         </Modal>
       )}
-      {modal === "editor" && draft && (
+      {modal === "editor" && drafts.length > 0 && (
         <EditReminder
-          initial={draft}
+          key={`${drafts[0].id || "new"}-${drafts.length}`}
+          initial={drafts[0]}
+          queueSize={drafts.length}
           settings={settings}
           busy={busy}
-          onSave={save}
+          onSave={async (savedReminder) => {
+            await save(savedReminder);
+            setDrafts((items) => {
+              const remaining = items.slice(1);
+              if (!remaining.length) setModal(null);
+              return remaining;
+            });
+          }}
           onClose={() => {
             setModal(null);
-            setDraft(null);
+            setDrafts([]);
           }}
         />
       )}
@@ -1486,7 +1506,7 @@ export default function App() {
       {modal === "subscription" && (
         <Modal
           title="Больше места для планов"
-          onClose={() => setModal(draft ? "editor" : null)}
+          onClose={() => setModal(drafts.length ? "editor" : null)}
         >
           <p>
             10 новых напоминаний в календарный месяц бесплатно. Срабатывания и

@@ -6,7 +6,7 @@ import {
   validateSchedule,
   zonedTime,
 } from "../src/domain/calendar.js";
-import { parseIntent } from "../src/domain/intent.js";
+import { parseIntent, parseIntents, splitIntentPhrases } from "../src/domain/intent.js";
 import { isNative } from "../src/lib/native.js";
 const now = new Date("2026-10-07T12:30:00Z");
 const base = {
@@ -273,5 +273,30 @@ test("action retains proper names and ё", () => {
   assert.equal(
     parseIntent("Напомни завтра в 9 утра позвонить Лёне", now).text,
     "Позвонить Лёне",
+  );
+});
+test("independent voice clauses become separate reminders", () => {
+  const phrase = "Напомни завтра в 9 позвонить маме и завтра в 10 купить хлеб";
+  assert.deepEqual(splitIntentPhrases(phrase), [
+    "Напомни завтра в 9 позвонить маме",
+    "завтра в 10 купить хлеб",
+  ]);
+  const parsed = parseIntents(phrase, now);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[0].text, "Позвонить маме");
+  assert.equal(parsed[1].text, "Купить хлеб");
+  assert.equal(new Date(parsed[0].schedule.at).getHours(), 9);
+  assert.equal(new Date(parsed[1].schedule.at).getHours(), 10);
+});
+test("independent clauses can use a bare second time", () => {
+  const parsed = parseIntents("Напомни завтра в 9 позвонить маме и в 10 купить хлеб", now);
+  assert.equal(parsed.length, 2);
+  assert.equal(parsed[1].text, "Купить хлеб");
+  assert.equal(new Date(parsed[1].schedule.at).getHours(), 10);
+});
+test("multiple times in one recurring rule stay one reminder", () => {
+  assert.equal(
+    parseIntents("Каждый день в 8 и 20 напомни пить воду", now).length,
+    1,
   );
 });

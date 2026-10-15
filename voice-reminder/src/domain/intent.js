@@ -212,3 +212,23 @@ export function parseIntent(phrase, now = new Date()) {
     confidence: issues.length ? "needsConfirmation" : "parsed",
   };
 }
+
+// Separate independent reminders only when the second clause starts with an
+// explicit time/date marker. This keeps "каждый день в 8 и 20" as one rule.
+export function splitIntentPhrases(phrase) {
+  const source = String(phrase || "").trim();
+  if (!source) return [];
+  const recurring =
+    /кажд|ежеднев|еженедел|ежемесяч|ежегод|по\s+(?:понедель|вторник|сред|четвер|пятниц|суббот|воскрес|будн|выходн)/iu.test(
+      source,
+    );
+  const marker = recurring
+    ? "(?:сегодня|завтра|послезавтра|через\\s+\\d+|кажд[а-я]*|ежеднев[а-я]*|еженедел[а-я]*|ежемесяч[а-я]*|ежегод[а-я]*|по\\s+(?:понедельник[а-я]*|вторник[а-я]*|сред[а-я]*|четверг[а-я]*|пятниц[а-я]*|суббот[а-я]*|воскресень[а-я]*|будн[а-я]*|выходн[а-я]*))"
+    : "(?:сегодня|завтра|послезавтра|через\\s+\\d+|в\\s+(?:понедельник[а-я]*|вторник[а-я]*|сред[а-я]*|четверг[а-я]*|пятниц[а-я]*|суббот[а-я]*|воскресень[а-я]*|\\d{1,2}(?::\\d{2})?(?:\\s+(?:утра|дня|вечера|ночи))?))";
+  const boundary = new RegExp(`\\s+(?:и|а)\\s+(?=(?:напомни(?:те)?\\s+)?${marker})`, "giu");
+  return source.split(boundary).map((part) => part.trim()).filter(Boolean);
+}
+
+export function parseIntents(phrase, now = new Date()) {
+  return splitIntentPhrases(phrase).map((part) => parseIntent(part, now));
+}

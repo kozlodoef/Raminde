@@ -2,6 +2,7 @@ package ru.voicereminder.app.reminders;
 import android.content.*;
 import android.app.*;
 import android.os.Build;
+import android.database.sqlite.SQLiteConstraintException;
 import org.json.*;
 public class AlarmReceiver extends BroadcastReceiver {
  @Override public void onReceive(Context c,Intent intent){String action=intent.getAction();if(action==null)return;if(!action.equals(AlarmScheduler.FIRE)&&!action.equals(AlarmScheduler.RETRY)&&!action.equals(AlarmScheduler.ACK)&&!action.equals(AlarmScheduler.SNOOZE))return;
@@ -9,7 +10,7 @@ public class AlarmReceiver extends BroadcastReceiver {
  try(ReminderStore db=new ReminderStore(c)){
   if(action.equals(AlarmScheduler.ACK)){ack(c,db,id,"notification");return;}if(action.equals(AlarmScheduler.SNOOZE)){snooze(c,db,id,5);return;}
   JSONObject event;
-  if(action.equals(AlarmScheduler.FIRE)){JSONObject r=db.rule(id);if(r==null||!r.optBoolean("enabled",true))return;long scheduled=r.optLong("nextTriggerAt",0);if(scheduled<=0)return;String eid=id+"@"+scheduled;event=db.event(eid);if(event==null){event=new JSONObject().put("id",eid).put("reminderId",id).put("text",r.getString("text")).put("state","ringing").put("scheduledAt",scheduled).put("attemptCount",0);event.put("nativeId",db.put("events","eid",eid,event));}else if(event.optString("state").equals("acknowledged"))return;
+   if(action.equals(AlarmScheduler.FIRE)){JSONObject r=db.rule(id);if(r==null||!r.optBoolean("enabled",true))return;long scheduled=r.optLong("nextTriggerAt",0);if(scheduled<=0)return;String eid=id+"@"+scheduled;event=db.event(eid);boolean created=false;if(event==null){event=new JSONObject().put("id",eid).put("reminderId",id).put("text",r.getString("text")).put("state","ringing").put("scheduledAt",scheduled).put("attemptCount",0);try{event.put("nativeId",db.put("events","eid",eid,event));created=true;}catch(SQLiteConstraintException race){event=db.event(eid);}}if(!created)return;
    if(r.getJSONObject("schedule").optString("kind").equals("once")){r.put("enabled",false);db.put("rules","rid",id,r);}else AlarmScheduler.plan(c,db,r);
   }else{event=db.event(id);if(event==null||!java.util.Arrays.asList("ringing","waiting","snoozed").contains(event.optString("state")))return;}
   event.put("state","ringing").put("attemptCount",event.optInt("attemptCount")+1).put("deliveredAt",System.currentTimeMillis());db.put("events","eid",event.getString("id"),event);
