@@ -162,6 +162,70 @@ function Clock({ value }) {
     </div>
   );
 }
+function Calendar({ reminders, selectedDate, onSelect }) {
+  const today = localDate();
+  const [year, month] = (selectedDate || today).split("-").map(Number);
+  const first = new Date(Date.UTC(year, month - 1, 1));
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const leading = (first.getUTCDay() + 6) % 7;
+  const dates = Array.from({ length: leading + daysInMonth }, (_, index) => {
+    if (index < leading) return null;
+    return `${year}-${pad(month)}-${pad(index - leading + 1)}`;
+  });
+  const counts = new Map();
+  for (const reminder of reminders) {
+    if (!reminder.enabled) continue;
+    const schedule = reminder.schedule;
+    const tz = schedule.timezoneMode === "fixed" ? schedule.timezone : zone();
+    const occurrences = schedule.kind === "once"
+      ? [new Date(schedule.at).getTime()]
+      : nextOccurrences(
+          schedule,
+          zonedTime(`${year}-${pad(month)}-01`, "00:00", tz) - 1,
+          Math.max(31, daysInMonth * 4),
+        );
+    for (const occurrence of occurrences) {
+      const date = localDate(new Date(occurrence), tz);
+      if (date.slice(0, 7) === `${year}-${pad(month)}`)
+        counts.set(date, (counts.get(date) || 0) + 1);
+    }
+  }
+  const title = new Intl.DateTimeFormat("ru-RU", {
+    month: "long",
+    year: "numeric",
+  }).format(first);
+  const shiftMonth = (delta) => {
+    const next = new Date(Date.UTC(year, month - 1 + delta, 1));
+    onSelect(`${next.getUTCFullYear()}-${pad(next.getUTCMonth() + 1)}-01`);
+  };
+  return (
+    <section className="calendar" aria-label="Календарь напоминаний">
+      <header className="calendar-header">
+        <button className="icon-button" aria-label="Предыдущий месяц" onClick={() => shiftMonth(-1)}>‹</button>
+        <h2>{title[0].toUpperCase() + title.slice(1)}</h2>
+        <button className="icon-button" aria-label="Следующий месяц" onClick={() => shiftMonth(1)}>›</button>
+      </header>
+      <div className="calendar-weekdays" aria-hidden="true">
+        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"].map((name) => <span key={name}>{name}</span>)}
+      </div>
+      <div className="calendar-grid">
+        {dates.map((date, index) => date ? (
+          <button
+            key={date}
+            className={[date === selectedDate ? "selected" : "", date === today ? "today" : ""].filter(Boolean).join(" ")}
+            aria-label={`${date}${counts.has(date) ? `, ${counts.get(date)} напоминаний` : ""}`}
+            aria-pressed={date === selectedDate}
+            onClick={() => onSelect(date)}
+          >
+            <span>{Number(date.slice(-2))}</span>
+            {counts.has(date) && <i aria-hidden="true">{counts.get(date) > 9 ? "9+" : counts.get(date)}</i>}
+          </button>
+        ) : <span className="calendar-empty" key={`empty-${index}`} />)}
+      </div>
+      <button className="text-button calendar-today" onClick={() => onSelect(today)}>Сегодня</button>
+    </section>
+  );
+}
 function Wheel({ label, value, values, onChange }) {
   const ref = useRef(),
     timer = useRef();
@@ -784,7 +848,8 @@ export default function App() {
     [bill, setBill] = useState(null),
     [receiptEmail, setReceiptEmail] = useState(""),
     [restoreCode, setRestoreCode] = useState(""),
-    [displayKey, setDisplayKey] = useState("");
+    [displayKey, setDisplayKey] = useState(""),
+    [selectedDate, setSelectedDate] = useState(localDate());
   const recording = useRef(),
     pendingStop = useRef(false),
     mounted = useRef(true);
@@ -943,7 +1008,24 @@ export default function App() {
     alarm = active[0],
     reminders = [...state.reminders].sort(
       (a, b) => (a.nextTriggerAt || Infinity) - (b.nextTriggerAt || Infinity),
-    );
+    ),
+    selectedReminders = reminders.filter((reminder) => {
+      if (!reminder.enabled) return false;
+      const schedule = reminder.schedule;
+      const tz = schedule.timezoneMode === "fixed" ? schedule.timezone : zone();
+      if (schedule.kind === "once")
+        return localDate(new Date(schedule.at), tz) === selectedDate;
+      return nextOccurrences(
+        schedule,
+        zonedTime(selectedDate, "00:00", tz) - 1,
+        32,
+      ).some((when) => localDate(new Date(when), tz) === selectedDate);
+    });
+  const selectedLabel = new Intl.DateTimeFormat("ru-RU", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(new Date(`${selectedDate}T12:00:00`));
   return (
     <main className="app">
       <header className="top">
@@ -1016,6 +1098,11 @@ export default function App() {
           или введите вручную <Icon name="arrow" size={18} />
         </button>
       </section>
+      <Calendar
+        reminders={reminders}
+        selectedDate={selectedDate}
+        onSelect={setSelectedDate}
+      />
       {message && (
         <div className="feedback" role="status">
           <span>{message}</span>
@@ -1033,17 +1120,17 @@ export default function App() {
       )}
       <section className="reminders">
         <header className="section-heading">
-          <h2>Напоминания</h2>
-          <span>{reminders.filter((r) => r.enabled).length} активных</span>
+          <h2>На {selectedDate === localDate() ? "сегодня" : selectedLabel}</h2>
+          <span>{selectedReminders.length} запланировано</span>
         </header>
-        {!reminders.length ? (
+        {!selectedReminders.length ? (
           <div className="empty-state">
             <Icon name="bell" size={28} />
-            <h3>Освободите место в голове</h3>
-            <p>Скажите о деле — мы запомним его за вас.</p>
+            <h3>На этот день пока пусто</h3>
+            <p>Выберите другой день или создайте новое напоминание.</p>
           </div>
         ) : (
-          reminders.map((r) => (
+          selectedReminders.map((r) => (
             <article
               className={"reminder " + (!r.enabled ? "paused" : "")}
               key={r.id}
