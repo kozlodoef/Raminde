@@ -84,7 +84,10 @@ function extractSpecificDates(phrase, now) {
   const dates = [];
   const add = (start, end, day, monthWord, year) => {
     const month = monthNumber(monthWord);
-    if (!month || day < 1 || day > 31) return;
+    if (!month || day < 1 || day > 31) {
+      dates.push(null);
+      return;
+    }
     const iso = makeSpecificDate(year, month, day, now);
     dates.push(iso);
   };

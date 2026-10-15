@@ -264,7 +264,8 @@ export function nextOccurrences(s, after = Date.now(), limit = 5) {
       dates = [...new Set(s.specificDates)].sort(),
       emitted = [];
     for (const ds of dates) {
-      if (s.excludedDates?.includes(ds)) continue;
+      if (s.excludedDates?.includes(ds) || (s.until && dateEpoch(ds) > until))
+        continue;
       for (const time of times) {
         const t = zonedTime(ds, time, tz);
         if (

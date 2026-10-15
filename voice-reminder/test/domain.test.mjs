@@ -320,3 +320,10 @@ test("invalid date in a finite date set asks for correction", () => {
   )[0];
   assert.ok(r.issues.some((issue) => issue.includes("несуществующая дата")));
 });
+test("invalid day in a finite date set asks for correction", () => {
+  const r = parseIntents(
+    "Напомни 0 марта и 20 марта в 10 позвонить врачу",
+    now,
+  )[0];
+  assert.ok(r.issues.some((issue) => issue.includes("несуществующая дата")));
+});
