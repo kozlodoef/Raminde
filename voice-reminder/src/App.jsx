@@ -1,3 +1,4 @@
+import { eventCardStyle } from "./lib/event-colors.js";
 import { isComposingReminder } from "./domain/draft-mode.js";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
@@ -566,7 +567,9 @@ export default function App() {
           <div className="home-layout">
             <section className="voice-card">
               <header>
-                <span className={"voice-status " + (voiceActive ? "live" : "")}>
+                <div className="voice-heading">
+                  <span className="brand-wordmark" aria-label="Remind me">remind me<span>.</span></span>
+                  <span className={"voice-status " + (voiceActive ? "live" : "")}>
                   <i />
                   {voice === "listening"
                     ? "Слушаю"
@@ -581,7 +584,8 @@ export default function App() {
                             : composing
                               ? "Черновик напоминания"
                               : "Ваши напоминания"}
-                </span>
+                  </span>
+                </div>
                 <button
                   className="icon-button mic-small"
                   disabled={voiceActive || busy}
@@ -888,6 +892,7 @@ export default function App() {
                       className={
                         "agenda-event " + (e.at < Date.now() ? "past" : "")
                       }
+                      style={eventCardStyle(e.color)}
                       onClick={() => {
                         const r = state.reminders.find(
                           (r) => r.id === e.reminderId,
@@ -913,6 +918,7 @@ export default function App() {
                     <button
                       className="agenda-event"
                       key={r.id}
+                      style={eventCardStyle(colorFor(r))}
                       onClick={() => {
                         setEditing({ rule: r });
                         setModal("event");
