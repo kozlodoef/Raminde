@@ -22,44 +22,44 @@ const rule = (id, n = 1, dates = [day]) => ({
     ),
   },
 });
-test("24 occurrences on one day are accepted; 25 are rejected", () => {
-  const saved = Array.from({ length: 23 }, (_, i) => rule("e" + i));
+test("12 occurrences on one day are accepted; 13 are rejected", () => {
+  const saved = Array.from({ length: 11 }, (_, i) => rule("e" + i));
   assert.doesNotThrow(() => assertDailyCapacity(saved, [rule("last")]));
   assert.throws(
     () => assertDailyCapacity([...saved, rule("last")], [rule("overflow")]),
-    /25 событий/,
+    /13 событий/,
   );
 });
 test("multiple times consume multiple places on each selected day", () => {
-  const saved = Array.from({ length: 22 }, (_, i) => rule("e" + i));
+  const saved = Array.from({ length: 10 }, (_, i) => rule("e" + i));
   assert.throws(
     () => assertDailyCapacity(saved, [rule("three", 3, [day, "2026-11-09"])]),
-    /25 событий/,
+    /13 событий/,
   );
 });
 test("editing a group replaces old occurrences, rather than doubling their count", () => {
-  const saved = Array.from({ length: 24 }, (_, i) => rule("e" + i));
+  const saved = Array.from({ length: 12 }, (_, i) => rule("e" + i));
   assert.doesNotThrow(() =>
     assertDailyCapacity(saved, [{ ...saved[0], text: "Edited" }]),
   );
 });
 test("batch is validated together before any groups are saved", () => {
-  const saved = Array.from({ length: 23 }, (_, i) => rule("e" + i));
+  const saved = Array.from({ length: 11 }, (_, i) => rule("e" + i));
   assert.throws(
     () => assertDailyCapacity(saved, [rule("a"), rule("b")]),
-    /25 событий/,
+    /13 событий/,
   );
 });
 test("explicit dates far beyond a year still respect the limit", () => {
   const future = "2080-01-04",
-    saved = Array.from({ length: 24 }, (_, i) => rule("e" + i, 1, [future]));
+    saved = Array.from({ length: 12 }, (_, i) => rule("e" + i, 1, [future]));
   assert.throws(
     () => assertDailyCapacity(saved, [rule("future", 1, [future])]),
-    /25 событий/,
+    /13 событий/,
   );
 });
 test("paused new group does not consume places", () => {
-  const saved = Array.from({ length: 24 }, (_, i) => rule("e" + i));
+  const saved = Array.from({ length: 12 }, (_, i) => rule("e" + i));
   assert.doesNotThrow(() =>
     assertDailyCapacity(saved, [{ ...rule("paused"), enabled: false }]),
   );
@@ -101,8 +101,8 @@ test("one group at three times has three identically coloured segments", () => {
 test("24 default colours are distinct", () =>
   assert.equal(new Set(COLORS).size, 24));
 
-test("a twenty-fifth draft sector never displaces a saved sector", () => {
-  const saved = Array.from({ length: 24 }, (_, i) => ({
+test("a thirteenth draft sector never displaces a saved sector", () => {
+  const saved = Array.from({ length: 12 }, (_, i) => ({
     id: "s@" + i,
     reminderId: "saved-" + i,
     date: day,
@@ -117,6 +117,6 @@ test("a twenty-fifth draft sector never displaces a saved sector", () => {
     color: COLORS[0],
   };
   const segments = daySegments([...saved, pending], day, { draftId: "draft" });
-  assert.equal(segments.length, 25);
-  assert.ok(segments.slice(0, 24).every((s) => !s.pending));
+  assert.equal(segments.length, 13);
+  assert.ok(segments.slice(0, 12).every((s) => !s.pending));
 });

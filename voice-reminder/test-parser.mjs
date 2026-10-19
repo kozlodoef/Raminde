@@ -3,7 +3,8 @@ import { parseReminder } from './src/lib/timeParser.js';
 // ВАЖНО про точность: `fmt` выводит минуты без секунд, а относительные фразы
 // отсчитываются от «сейчас» в момент разбора. Поэтому для таких случаев задан
 // допуск в минутах — иначе тест ловил бы переход через границу минуты.
-const now = new Date();
+// Fixed clock: absolute-date expectations must not change after 15 October.
+const now = new Date(2026, 9, 7, 12, 0, 0);
 const p = (n) => String(n).padStart(2, '0');
 const fmt = (d) => `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
@@ -77,7 +78,7 @@ const cases = [
 
 let pass = 0, fail = 0;
 for (const [phrase, expectWhen, expectText, tolMin] of cases) {
-  const r = parseReminder(phrase);
+  const r = parseReminder(phrase, now);
   const got = fmt(r.when);
   let okTime;
   if (expectWhen === null) {

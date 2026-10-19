@@ -1,3 +1,4 @@
+import { isComposingReminder } from "./domain/draft-mode.js";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startRecognition } from "./lib/speech.js";
@@ -109,6 +110,7 @@ export default function App() {
     [month, setMonth] = useState(localDate().slice(0, 7)),
     [draft, setDraft] = useState(() => cachedDrafts().draft || blank()),
     [queue, setQueue] = useState(() => cachedDrafts().queue || []),
+    [creating, setCreating] = useState(() => !!cachedDrafts().creating),
     [voice, setVoice] = useState("idle"),
     [live, setLive] = useState(""),
     [message, setMessage] = useState(""),
@@ -131,8 +133,11 @@ export default function App() {
     autoStarted = useRef(false);
   draftRef.current = draft;
   useEffect(() => {
-    localStorage.setItem("raminde.drafts.v3", JSON.stringify({ draft, queue }));
-  }, [draft, queue]);
+    localStorage.setItem(
+      "raminde.drafts.v3",
+      JSON.stringify({ draft, queue, creating }),
+    );
+  }, [draft, queue, creating]);
   const refresh = async () => {
     if (saving.current) return;
     try {
@@ -364,6 +369,7 @@ export default function App() {
     }
   };
   function newDraft() {
+    setCreating(false);
     recording.current?.abort();
     setMessage("");
     setDraft(blank((state?.reminders.length || 0) + queue.length + 1));
@@ -456,6 +462,7 @@ export default function App() {
           setLive("");
         }
       }
+      setCreating(false);
       setMessage(`Сохранено групп: ${batch.length}`);
       setEditing(null);
       setModal("saved");
@@ -502,6 +509,13 @@ export default function App() {
       </main>
     );
   const settings = state.settings;
+  const composing = isComposingReminder({
+    draft,
+    queue,
+    voice,
+    live,
+    started: creating,
+  });
   const dates = draft.dates.length ? draft.dates : [localDate()];
   const trial = bill?.trialEndsAt || state.access?.trialEndsAt,
     active = bill ? bill.active : accessActive(state.access);
@@ -544,7 +558,9 @@ export default function App() {
                         ? "Разбираю…"
                         : editing
                           ? "Редактирование"
-                          : "Черновик напоминания"}
+                          : composing
+                            ? "Черновик напоминания"
+                            : "Ваши напоминания"}
                 </span>
                 <button
                   className="icon-button mic-small"
@@ -694,19 +710,24 @@ export default function App() {
               <Calendar
                 month={month}
                 onMonth={setMonth}
+                selecting={composing}
                 dates={
-                  draft.schedule && draft.schedule.kind !== "dates"
+                  !composing
                     ? []
-                    : draft.dates.length || draft.text.trim() || live
-                      ? dates
-                      : []
+                    : draft.schedule && draft.schedule.kind !== "dates"
+                      ? []
+                      : draft.dates.length || draft.text.trim() || live
+                        ? dates
+                        : []
                 }
-                onDate={pick}
-                onOpenDay={(d) => {
-                  recording.current?.abort();
-                  setDayFilter(d);
-                  setTab("events");
-                  setMessage("");
+                onDate={(d) => {
+                  if (busy) return;
+                  if (composing) pick(d);
+                  else {
+                    setDayFilter(d);
+                    setTab("events");
+                    setMessage("");
+                  }
                 }}
                 draftId={draft.id}
                 occurrences={marks}
@@ -757,6 +778,7 @@ export default function App() {
                 className="text-button"
                 onClick={() => {
                   newDraft();
+                  setCreating(true);
                   setTab("home");
                 }}
               >
@@ -1103,8 +1125,9 @@ export default function App() {
             системным речевым сервисом, который может использовать интернет.
           </p>
           <p className="hint">
-            Нажмите на даты, чтобы выбрать дни. Удерживайте дату, чтобы увидеть
-            её события. После первого автостарта запись включается кнопкой
+            Пока создаёте напоминание, нажатия выбирают даты — даже после
+            остановки записи. После «Готово» нажатие на дату открывает события
+            дня. Не более 12 срабатываний в день. Повторная запись — кнопкой
             микрофона.
           </p>
           <label className="field">
@@ -1158,6 +1181,7 @@ export default function App() {
             onClick={() => {
               setModal(null);
               setMessage("");
+              setCreating(true);
             }}
           >
             Новое напоминание

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef } from "react";
 import { monthBounds } from "./domain/groups.js";
 import { localDate, pad } from "./domain/calendar.js";
 import { daySegments, MAX_DAILY_EVENTS } from "./domain/day-capacity.js";
@@ -11,10 +11,8 @@ function shift(month, step) {
     d = new Date(y, m - 1 + step, 1);
   return d.getFullYear() + "-" + pad(d.getMonth() + 1);
 }
-function Day({ date, today, selected, segments, onDate, onOpenDay }) {
-  const press = useRef({ timer: null, long: false, cancelled: false });
-  const clear = () => clearTimeout(press.current.timer);
-  useEffect(() => () => clearTimeout(press.current.timer), []);
+function Day({ date, today, selected, segments, onDate, selecting }) {
+  const press = useRef({ cancelled: false });
   const n = Math.min(segments.length, MAX_DAILY_EVENTS),
     perimeter = 2 * Math.PI * 20;
   return (
@@ -25,60 +23,36 @@ function Day({ date, today, selected, segments, onDate, onOpenDay }) {
         (date === today ? "today" : "")
       }
       aria-label={label(date)}
-      aria-pressed={selected}
+      aria-pressed={selecting ? selected : undefined}
       aria-describedby="calendar-gestures"
-      title={`${label(date)} · ${segments.length} событий. Удерживайте для просмотра.`}
+      title={`${label(date)} · ${segments.length} событий. ${selecting ? "Выбрать дату" : "Открыть события дня"}.`}
       data-event-count={segments.length}
       onPointerDown={(e) => {
         if (!e.isPrimary || e.button !== 0) return;
-        clear();
-        press.current = {
-          x: e.clientX,
-          y: e.clientY,
-          long: false,
-          cancelled: false,
-          timer: setTimeout(() => {
-            press.current.long = true;
-            onOpenDay(date);
-          }, 600),
-        };
+        press.current = { x: e.clientX, y: e.clientY, cancelled: false };
       }}
       onPointerMove={(e) => {
         if (
           Math.hypot(e.clientX - press.current.x, e.clientY - press.current.y) >
           10
-        ) {
-          clear();
+        )
           press.current.cancelled = true;
-        }
       }}
-      onPointerUp={clear}
       onPointerCancel={() => {
-        clear();
         press.current.cancelled = true;
       }}
       onClick={(e) => {
-        if (press.current.long || press.current.cancelled) {
+        if (press.current.cancelled) {
           e.preventDefault();
-          press.current.long = false;
           press.current.cancelled = false;
           return;
         }
         onDate(date);
       }}
-      onContextMenu={(e) => {
-        e.preventDefault();
-        clear();
-        if (!press.current.long) onOpenDay(date);
-        press.current.long = true;
-      }}
       onKeyDown={(e) => {
-        if ((e.key === "Enter" || e.key === " ") && e.shiftKey) {
-          e.preventDefault();
-          press.current.long = true;
-          onOpenDay(date);
-        }
+        if (e.key === "Enter" || e.key === " ") press.current.cancelled = false;
       }}
+      onContextMenu={(e) => e.preventDefault()}
     >
       {n > 0 && (
         <svg className="day-ring" viewBox="0 0 48 48" aria-hidden="true">
@@ -116,7 +90,7 @@ export default function Calendar({
   onMonth,
   dates,
   onDate,
-  onOpenDay,
+  selecting,
   occurrences,
   color,
   draftId,
@@ -127,7 +101,11 @@ export default function Calendar({
     i < bounds.offset ? null : month + "-" + pad(i - bounds.offset + 1),
   );
   return (
-    <section className="month-card" aria-label="Календарь">
+    <section
+      className="month-card"
+      aria-label="Календарь"
+      data-mode={selecting ? "select" : "browse"}
+    >
       <header>
         <button
           className="icon-button"
@@ -165,7 +143,7 @@ export default function Calendar({
               selected={dates.includes(d)}
               segments={daySegments(occurrences, d, { dates, color, draftId })}
               onDate={onDate}
-              onOpenDay={onOpenDay}
+              selecting={selecting}
             />
           ) : (
             <span key={"empty" + i} />
@@ -173,8 +151,9 @@ export default function Calendar({
         )}
       </div>
       <span className="sr-only" id="calendar-gestures">
-        Короткое нажатие выбирает дату. Удерживайте или нажмите Shift и Enter
-        для просмотра событий дня.
+        {selecting
+          ? "Создание напоминания: нажатия выбирают даты до сохранения или очистки черновика."
+          : "Просмотр: нажатие открывает события выбранного дня."}
       </span>
     </section>
   );

@@ -1,6 +1,6 @@
 import { localDate } from "./calendar.js";
 import { occurrencesInMonth } from "./groups.js";
-export const MAX_DAILY_EVENTS = 24;
+export const MAX_DAILY_EVENTS = 12;
 // Equal segments represent occurrences; a group with three times uses three segments of its colour.
 export function daySegments(
   occurrences,
@@ -78,7 +78,7 @@ export function assertDailyCapacity(
     for (const [date, count] of counts)
       if (count > MAX_DAILY_EVENTS)
         throw Error(
-          `На ${date.split("-").reverse().join(".")} получится ${count} событий. Максимум — 24 в день. Выберите другую дату или уберите лишнее время.`,
+          `На ${date.split("-").reverse().join(".")} получится ${count} событий. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`,
         );
   }
 }
