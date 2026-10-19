@@ -670,3 +670,129 @@
     height: 42px;
   }
 }
+
+/* Intrinsic calendar; remaining vertical space belongs to the reminder field. */
+.home-screen .planner-content {
+  height: calc(100vh - 108px - env(safe-area-inset-bottom));
+  height: calc(100dvh - 108px - env(safe-area-inset-bottom));
+  padding-bottom: 0;
+}
+.home-screen .home-layout {
+  height: 100%;
+  min-height: 100%;
+  grid-template-rows: minmax(min-content, 1fr) auto;
+  gap: 12px;
+}
+.home-screen .voice-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 280px;
+  padding: 12px 16px;
+}
+.home-screen .voice-card > :not(.event-text) {
+  flex-shrink: 0;
+}
+.home-screen .voice-card .event-text {
+  flex: 1 1 auto;
+  min-height: 116px;
+  height: 116px;
+  resize: none;
+  overflow-y: auto;
+  font-size: 22px;
+  line-height: 1.35;
+}
+.home-screen .voice-card .event-text.is-empty {
+  font-size: 17px;
+  line-height: 1.5;
+  letter-spacing: 0;
+}
+.home-screen .calendar-pane {
+  min-height: 0;
+  align-self: start;
+}
+.home-screen .month-card {
+  height: auto;
+  min-height: 0;
+  padding: 6px 8px 2px;
+}
+.home-screen .month-card header {
+  margin-bottom: 2px;
+}
+.home-screen .weekdays {
+  margin-bottom: 4px;
+}
+.home-screen .days {
+  grid-auto-rows: 44px;
+  row-gap: 2px;
+  column-gap: 2px;
+  align-content: start;
+}
+.home-screen .ring-day {
+  min-height: 44px;
+  height: 44px;
+}
+.home-screen .day-ring {
+  width: 42px;
+  height: 42px;
+}
+.home-screen .planner-actions {
+  position: static;
+  transform: none;
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  margin: 10px 0 0;
+}
+.home-screen .queued {
+  margin-top: 8px;
+  max-height: 120px;
+  overflow: auto;
+}
+.voice-notice {
+  margin: 8px 0 0;
+  border-radius: 10px;
+  padding: 8px 10px;
+  background: var(--soft);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.save-text {
+  align-self: flex-start;
+  font-size: 14px;
+  min-height: 44px;
+  padding: 0 4px;
+}
+.recording-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  background: var(--soft);
+  border-radius: 14px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+}
+.recording-banner .primary {
+  min-height: 44px;
+  padding: 0 20px;
+}
+@media (min-width: 800px) {
+  .home-screen .planner-content {
+    height: calc(100dvh - 128px);
+  }
+  .home-screen .home-layout {
+    grid-template-rows: minmax(0, 1fr);
+    align-items: start;
+  }
+  .home-screen .voice-card {
+    height: 100%;
+    min-height: 400px;
+    padding: 20px 24px;
+  }
+}
+@media (max-width: 379px) {
+  .home-screen .days,
+  .home-screen .weekdays {
+    column-gap: 0;
+  }
+}

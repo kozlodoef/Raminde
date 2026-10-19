@@ -67,7 +67,7 @@ export async function requestMicPermission() {
 
 // ------------------------------------------------------------- нативный ---
 
-async function startNative({ onInterim, onEnd, onError, onStart }) {
+async function startNative({ onInterim, onEnd, onError, onStart, cue = true }) {
   const { registerPlugin } = await import("@capacitor/core");
   const engine = registerPlugin("ReminderEngine");
   const partial = await engine.addListener("recognitionPartial", (e) =>
@@ -76,22 +76,19 @@ async function startNative({ onInterim, onEnd, onError, onStart }) {
   const state = await engine.addListener("recognitionState", (e) => {
     if (e.status === "started") onStart?.();
   });
-  let timer;
   const cleanup = async () => {
-    clearTimeout(timer);
     await partial.remove();
     await state.remove();
     onEnd?.();
   };
   const promise = engine
-    .recognize()
+    .recognize({ cue })
     .then((r) => r.text || "")
     .catch((e) => {
       onError?.(e.message);
       throw e;
     })
     .finally(cleanup);
-  timer = setTimeout(() => engine.abortRecognition().catch(() => {}), 30000);
   return {
     promise,
     stop: () => engine.stopRecognition(),

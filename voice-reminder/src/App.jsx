@@ -1,7 +1,7 @@
 import { isComposingReminder } from "./domain/draft-mode.js";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
-import { startRecognition } from "./lib/speech.js";
+import { startContinuousDictation } from "./lib/continuous-dictation.js";
 import { finishDictation } from "./lib/finish-dictation.js";
 import { primeAudio, playRecordingCue } from "./lib/alerts.js";
 import Calendar from "./PlannerCalendar.jsx";
@@ -130,7 +130,8 @@ export default function App() {
     starting = useRef(false),
     recognitionTask = useRef(null),
     saving = useRef(false),
-    autoStarted = useRef(false);
+    autoStarted = useRef(false),
+    parsedTranscript = useRef("");
   draftRef.current = draft;
   useEffect(() => {
     localStorage.setItem(
@@ -211,26 +212,33 @@ export default function App() {
     setLive("");
     try {
       if (!isNative()) await playRecordingCue();
-      const session = await startRecognition({
-        onStart: () => mounted.current && setVoice("listening"),
-        onInterim: (t) => mounted.current && setLive(t),
-      });
-      recording.current = session;
-      const text = await session.promise;
-      if (!mounted.current) return;
-      if (text) {
-        setVoice("processing");
-        const current = draftRef.current,
-          p = parseGroup(text, current.dates);
+      parsedTranscript.current = "";
+      const applyTranscript = (text) => {
+        if (!mounted.current || !text || parsedTranscript.current === text)
+          return;
+        parsedTranscript.current = text;
+        const current = draftRef.current;
         const parsed = {
           ...current,
-          ...p,
+          ...parseGroup(text, current.dates),
           color: current.color,
           id: current.id,
         };
         draftRef.current = parsed;
         setDraft(parsed);
         setLive(text);
+      };
+      const session = startContinuousDictation({
+        onStart: () => mounted.current && setVoice("listening"),
+        onWaiting: () => mounted.current && setVoice("restarting"),
+        onInterim: (t) => mounted.current && setLive(t),
+        onFinal: applyTranscript,
+      });
+      recording.current = session;
+      const text = await session.promise;
+      if (!mounted.current) return;
+      if (text) {
+        applyTranscript(text);
         return true;
       }
       return false;
@@ -249,7 +257,7 @@ export default function App() {
   }
   useEffect(() => {
     if (tab !== "home" || alarm) {
-      recording.current?.abort();
+      if (alarm) recording.current?.abort();
       if (state?.settings.onboarded) autoStarted.current = true;
       return;
     }
@@ -271,9 +279,7 @@ export default function App() {
     state?.settings.autoListen,
     modal,
   ]);
-  useEffect(() => {
-    if (modal) recording.current?.abort();
-  }, [modal]);
+
   const patch = (value) =>
     setDraft((d) => ({
       ...d,
@@ -369,6 +375,10 @@ export default function App() {
     }
   };
   function newDraft() {
+    if (recording.current || starting.current) {
+      setMessage("Сначала завершите диктовку кнопкой «Готово».");
+      return;
+    }
     setCreating(false);
     recording.current?.abort();
     setMessage("");
@@ -430,7 +440,7 @@ export default function App() {
           task: recognitionTask.current,
           session: () => recording.current,
         });
-        if (!recognized)
+        if (!recognized && !draftRef.current.text?.trim() && !queue.length)
           throw Error(
             "Речь не распознана. Повторите диктовку или введите напоминание вручную.",
           );
@@ -479,6 +489,10 @@ export default function App() {
     }
   }
   function editRule(r) {
+    if (recording.current || starting.current) {
+      setMessage("Сначала завершите диктовку кнопкой «Готово».");
+      return;
+    }
     recording.current?.abort();
     setDraft({
       ...r,
@@ -509,6 +523,7 @@ export default function App() {
       </main>
     );
   const settings = state.settings;
+  const voiceActive = voice !== "idle";
   const composing = isComposingReminder({
     draft,
     queue,
@@ -527,7 +542,7 @@ export default function App() {
   return (
     <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
       <div className="planner-content">
-        {message && (
+        {message && tab !== "home" && (
           <div className="planner-notice" role="status">
             <span>{message}</span>
             <button
@@ -539,47 +554,48 @@ export default function App() {
             </button>
           </div>
         )}
+        {tab !== "home" && voiceActive && (
+          <div className="recording-banner" role="status">
+            <span>Диктовка включена</span>
+            <button className="primary" disabled={busy} onClick={save}>
+              Готово
+            </button>
+          </div>
+        )}
         {tab === "home" && (
           <div className="home-layout">
             <section className="voice-card">
               <header>
-                <span
-                  className={
-                    "voice-status " +
-                    (["listening", "starting"].includes(voice) ? "live" : "")
-                  }
-                >
+                <span className={"voice-status " + (voiceActive ? "live" : "")}>
                   <i />
                   {voice === "listening"
                     ? "Слушаю"
                     : voice === "starting"
                       ? "Включаю микрофон…"
-                      : voice === "processing"
-                        ? "Разбираю…"
-                        : editing
-                          ? "Редактирование"
-                          : composing
-                            ? "Черновик напоминания"
-                            : "Ваши напоминания"}
+                      : voice === "restarting"
+                        ? "Продолжаю диктовку…"
+                        : voice === "processing"
+                          ? "Разбираю…"
+                          : editing
+                            ? "Редактирование"
+                            : composing
+                              ? "Черновик напоминания"
+                              : "Ваши напоминания"}
                 </span>
                 <button
                   className="icon-button mic-small"
+                  disabled={voiceActive || busy}
                   aria-label={
-                    ["listening", "starting"].includes(voice)
-                      ? "Остановить запись"
+                    voiceActive ? "Микрофон включён" : "Начать диктовку"
+                  }
+                  title={
+                    voiceActive
+                      ? "Завершите запись кнопкой «Готово»"
                       : "Начать диктовку"
                   }
-                  onClick={() =>
-                    ["listening", "starting"].includes(voice)
-                      ? recording.current?.stop()
-                      : listen()
-                  }
+                  onClick={listen}
                 >
-                  <Icon
-                    name={
-                      ["listening", "starting"].includes(voice) ? "stop" : "mic"
-                    }
-                  />
+                  <Icon name="mic" />
                 </button>
               </header>
               {live && (
@@ -597,10 +613,10 @@ export default function App() {
               </label>
               <textarea
                 id="event-text"
-                className="event-text"
-                rows={draft.text && draft.text.length < 30 ? 1 : 2}
+                className={"event-text" + (!draft.text ? " is-empty" : "")}
+                rows={6}
                 value={draft.text}
-                placeholder="Скажите, что и когда напомнить…"
+                placeholder="Сообщите, о чём хотите сделать напоминание, и укажите время. Затем выберите дату или даты на календаре. В конце нажмите «Готово»."
                 onChange={(e) => patch({ text: e.target.value })}
               />
               <div className="time-chips">
@@ -674,6 +690,7 @@ export default function App() {
               <div className="draft-tools">
                 <button
                   className="text-button"
+                  disabled={voiceActive}
                   onClick={() => setModal("repeat")}
                 >
                   Повторение
@@ -687,6 +704,7 @@ export default function App() {
                 <button
                   className="icon-button"
                   aria-label="Очистить черновик"
+                  disabled={voiceActive || busy}
                   onClick={newDraft}
                 >
                   <Icon name="close" size={18} />
@@ -705,6 +723,42 @@ export default function App() {
                   }
                 />
               </div>
+              {message && !["saved", "saveError"].includes(modal) && (
+                <p className="voice-notice" role="status">
+                  {message}
+                </p>
+              )}
+              {!voiceActive && (draft.text.trim() || queue.length > 0) && (
+                <button
+                  className="text-button save-text"
+                  disabled={busy}
+                  onClick={save}
+                >
+                  Сохранить без записи
+                </button>
+              )}
+              {queue.length > 0 && (
+                <div className="queued">
+                  <strong>Черновики · {queue.length}</strong>
+                  {queue.map((r) => (
+                    <div key={r.id}>
+                      <i style={{ background: r.color }} />
+                      <span>
+                        {r.text} · {r.times.join(", ")}
+                      </span>
+                      <button
+                        className="icon-button"
+                        aria-label={"Удалить черновик " + r.text}
+                        onClick={() =>
+                          setQueue((q) => q.filter((x) => x.id !== r.id))
+                        }
+                      >
+                        <Icon name="close" size={16} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </section>
             <div className="calendar-pane">
               <Calendar
@@ -733,28 +787,6 @@ export default function App() {
                 occurrences={marks}
                 color={draft.color}
               />
-              {queue.length > 0 && (
-                <div className="queued">
-                  <strong>Черновики · {queue.length}</strong>
-                  {queue.map((r) => (
-                    <div key={r.id}>
-                      <i style={{ background: r.color }} />
-                      <span>
-                        {r.text} · {r.times.join(", ")}
-                      </span>
-                      <button
-                        className="icon-button"
-                        aria-label={"Удалить черновик " + r.text}
-                        onClick={() =>
-                          setQueue((q) => q.filter((x) => x.id !== r.id))
-                        }
-                      >
-                        <Icon name="close" size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
               <div className="planner-actions">
                 <button
                   className="secondary"
@@ -763,8 +795,12 @@ export default function App() {
                 >
                   Добавить
                 </button>
-                <button className="primary" disabled={busy} onClick={save}>
-                  {busy ? "Сохраняю…" : "Готово"}
+                <button
+                  className="primary"
+                  disabled={busy}
+                  onClick={voiceActive ? save : listen}
+                >
+                  {busy ? "Сохраняю…" : voiceActive ? "Готово" : "Начать"}
                 </button>
               </div>
             </div>
@@ -776,6 +812,7 @@ export default function App() {
               <h1>События</h1>
               <button
                 className="text-button"
+                disabled={voiceActive || busy}
                 onClick={() => {
                   newDraft();
                   setCreating(true);
@@ -832,7 +869,9 @@ export default function App() {
                 <h2>
                   {dayFilter ? "В этот день нет событий" : "Месяц без событий"}
                 </h2>
-                <p>Нажмите «Добавить», создайте напоминание и выберите этот день.</p>
+                <p>
+                  Нажмите «Добавить», создайте напоминание и выберите этот день.
+                </p>
               </div>
             )}
             {eventDates.map((d) => (
@@ -1293,6 +1332,7 @@ export default function App() {
           )}
           <button
             className="primary full"
+            disabled={voiceActive || busy}
             onClick={() => {
               editRule(editing.rule);
               setModal(null);
