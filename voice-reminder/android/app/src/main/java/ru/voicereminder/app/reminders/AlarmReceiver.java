@@ -14,7 +14,7 @@ public class AlarmReceiver extends BroadcastReceiver {
   }else{event=db.event(id);if(event==null||!java.util.Arrays.asList("ringing","waiting","snoozed").contains(event.optString("state")))return;}
   event.put("state","ringing").put("attemptCount",event.optInt("attemptCount")+1).put("deliveredAt",System.currentTimeMillis());db.put("events","eid",event.getString("id"),event);
   JSONObject settings=db.meta("settings");String mode=settings.optString("mode","voiceAndNotification");
-  if(mode.equals("notification"))DeliveryService.notifyEvent(c,event,settings,false);
+  if(mode.equals("notification")||mode.equals("voiceAndNotification"))DeliveryService.notifyEvent(c,event,settings,false);
   if(!mode.equals("notification")){
    try{Intent service=new Intent(c,DeliveryService.class).putExtra("eventId",event.getString("id"));if(Build.VERSION.SDK_INT>=26)c.startForegroundService(service);else c.startService(service);}catch(Exception ex){DeliveryService.notifyEvent(c,event,settings,false);db.diagnostic("Android не разрешил фоновую озвучку: "+ex.getClass().getSimpleName());}
   }
@@ -22,6 +22,6 @@ public class AlarmReceiver extends BroadcastReceiver {
   if(repeat&&(max==0||event.optInt("attemptCount")<max)){long retry=System.currentTimeMillis()+Math.max(1,settings.optInt("repeatMinutes",5))*60000L;event.put("retryAt",retry);db.put("events","eid",event.getString("id"),event);AlarmScheduler.at(c,AlarmScheduler.RETRY,event.getString("id"),retry);}
  }catch(Exception e){try(ReminderStore db=new ReminderStore(c)){db.diagnostic("Ошибка доставки: "+e.getMessage());}}
  }
- public static void ack(Context c,ReminderStore db,String id,String source)throws Exception{JSONObject e=db.event(id);if(e==null)return;e.put("state","acknowledged").put("ackSource",source).put("acknowledgedAt",System.currentTimeMillis()).put("retryAt",JSONObject.NULL);db.put("events","eid",id,e);AlarmScheduler.cancel(c,AlarmScheduler.RETRY,id);c.getSystemService(NotificationManager.class).cancel(10000+e.optInt("nativeId"));DeliveryService.stopEvent(id);}
- public static void snooze(Context c,ReminderStore db,String id,int minutes)throws Exception{JSONObject e=db.event(id);if(e==null)return;long at=System.currentTimeMillis()+Math.max(1,minutes)*60000L;e.put("state","snoozed").put("retryAt",at);db.put("events","eid",id,e);AlarmScheduler.at(c,AlarmScheduler.RETRY,id,at);c.getSystemService(NotificationManager.class).cancel(10000+e.optInt("nativeId"));DeliveryService.stopEvent(id);}
+ public static void ack(Context c,ReminderStore db,String id,String source)throws Exception{JSONObject e=db.event(id);if(e==null)return;e.put("state","acknowledged").put("ackSource",source).put("acknowledgedAt",System.currentTimeMillis()).put("retryAt",JSONObject.NULL);db.put("events","eid",id,e);AlarmScheduler.cancel(c,AlarmScheduler.RETRY,id);c.getSystemService(NotificationManager.class).cancel(DeliveryService.alertId(e));c.getSystemService(NotificationManager.class).cancel(DeliveryService.foregroundId(e));DeliveryService.stopEvent(id);}
+ public static void snooze(Context c,ReminderStore db,String id,int minutes)throws Exception{JSONObject e=db.event(id);if(e==null)return;long at=System.currentTimeMillis()+Math.max(1,minutes)*60000L;e.put("state","snoozed").put("retryAt",at);db.put("events","eid",id,e);AlarmScheduler.at(c,AlarmScheduler.RETRY,id,at);c.getSystemService(NotificationManager.class).cancel(DeliveryService.alertId(e));c.getSystemService(NotificationManager.class).cancel(DeliveryService.foregroundId(e));DeliveryService.stopEvent(id);}
 }
