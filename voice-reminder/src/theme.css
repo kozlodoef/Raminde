@@ -63,9 +63,10 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .voice-card .mic-small { min-width: 48px; min-height: 48px; border-radius: 50%; border: 1px solid #617586; background: transparent; color: var(--lime); }
 .voice-card .mic-small:disabled { opacity: 1; border-color: var(--lime); background: #d9f34f12; }
 .voice-card .event-text { color: var(--on-dark); font-weight: 700; background: transparent; letter-spacing: -.035em; padding: 16px 0 8px; }
+.voice-card .event-text { background: #eef4f1; color: #182b32; border: 1px solid #9eb4b1; border-radius: 12px; padding: 12px 14px; }
 .home-screen .voice-card .event-text { font-size: 26px; line-height: 1.35; }
 .home-screen .voice-card .event-text.is-empty { font-size: 16px; line-height: 1.65; font-weight: 400; letter-spacing: -.01em; }
-.voice-card .event-text::placeholder { color: var(--dark-muted); opacity: 1; font-weight: 400; }
+.voice-card .event-text::placeholder { color: #536b6e; opacity: 1; font-weight: 400; }
 .voice-card .event-text:focus-visible { outline: 2px solid var(--sky); outline-offset: 4px; border-radius: 4px; }
 .voice-card .transcript { color: var(--dark-muted); font-size: 14px; }
 .voice-card .time-chips { gap: 6px; }
@@ -81,7 +82,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .voice-card .date-conflict { background: #fff0c9; color: #3d321a; border-radius: 12px; }
 .voice-card .date-conflict .text-button { color: #174e63; }
 /* Calendar keeps its natural height: no decorative filler below the dates. */
-.home-screen .month-card { padding: 8px 8px 2px; background: var(--surface); }
+.home-screen .month-card { padding: 8px 8px 2px; background: var(--surface); border: 2px solid #58717a; }
 .month-card header { padding-bottom: 4px; border-bottom: 1px solid var(--line); }
 .home-screen .month-card header { margin-bottom: 6px; }
 .month-card header h2 { font-family: var(--display); font-size: 25px; font-weight: 500; letter-spacing: -.02em; }

@@ -14,7 +14,7 @@ public class AlarmReceiver extends BroadcastReceiver {
   }else{event=db.event(id);if(event==null||!java.util.Arrays.asList("ringing","waiting","snoozed").contains(event.optString("state")))return;}
   event.put("state","ringing").put("attemptCount",event.optInt("attemptCount")+1).put("deliveredAt",System.currentTimeMillis());db.put("events","eid",event.getString("id"),event);
   JSONObject settings=db.meta("settings");String mode=settings.optString("mode","voiceAndNotification");
-  if(!mode.equals("voice"))DeliveryService.notifyEvent(c,event,settings,false);
+  if(mode.equals("notification"))DeliveryService.notifyEvent(c,event,settings,false);
   if(!mode.equals("notification")){
    try{Intent service=new Intent(c,DeliveryService.class).putExtra("eventId",event.getString("id"));if(Build.VERSION.SDK_INT>=26)c.startForegroundService(service);else c.startService(service);}catch(Exception ex){DeliveryService.notifyEvent(c,event,settings,false);db.diagnostic("Android не разрешил фоновую озвучку: "+ex.getClass().getSimpleName());}
   }

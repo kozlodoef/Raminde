@@ -245,7 +245,7 @@ export default function App() {
       };
       const session = startContinuousDictation({
         onStart: () => valid() && setVoice("listening"),
-        onWaiting: () => valid() && setVoice("restarting"),
+        onWaiting: () => valid() && setVoice("listening"),
         onInterim: (text) => valid() && setLive(text),
         onFinal: applyTranscript,
       });

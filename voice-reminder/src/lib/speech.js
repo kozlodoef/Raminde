@@ -109,7 +109,7 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
   }
   const rec = new Ctor();
   rec.lang = lang || "ru-RU";
-  rec.continuous = false;
+  rec.continuous = true;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
 
