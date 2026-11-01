@@ -10,6 +10,7 @@ export function startContinuousDictation({
   start = startRecognition,
   shouldContinue = () => typeof document === "undefined" || !document.hidden,
   restartDelayMs = 250,
+  restartOnEnd = true,
 } = {}) {
   let active = null,
     launching = false,
@@ -73,6 +74,10 @@ export function startContinuousDictation({
       if (aborted || settled) return;
       append(result);
       failures = 0;
+      if (!restartOnEnd) {
+        onWaiting?.();
+        return;
+      }
     } catch (error) {
       launching = false;
       active = null;
@@ -80,6 +85,10 @@ export function startContinuousDictation({
       const message = String(error?.message || error);
       if (stopRequested && /no-speech|aborted/.test(message)) {
         done();
+        return;
+      }
+      if (!restartOnEnd && /no-speech/.test(message)) {
+        onWaiting?.();
         return;
       }
       if (

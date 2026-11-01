@@ -65,6 +65,16 @@ test("silence does not turn the mode off", async () => {
   d.stop();
   assert.equal(await d.promise, "");
 });
+test("native mode keeps one recognizer after a pause", async () => {
+  const f = fake(),
+    d = startContinuousDictation({ start: f.start, restartOnEnd: false });
+  await until(() => f.cycles.length === 1);
+  f.cycles[0].yes("Медленная фраза");
+  await sleep(20);
+  assert.equal(f.cycles.length, 1);
+  d.stop();
+  assert.equal(await d.promise, "Медленная фраза");
+});
 test("Done in a gap prevents the next restart", async () => {
   const f = fake();
   let waiting = false;
