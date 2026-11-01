@@ -6,8 +6,11 @@
 // ВАЖНО про точность: fmt выводит минуты без секунд, а относительные фразы
 // отсчитываются от «сейчас» в момент разбора. Поэтому для таких случаев задан
 // допуск в минутах — иначе тест ловил бы переход через границу минуты.
+// ВАЖНО: парсер и его тесты не зависят от Flutter, поэтому запускаются и
+// «чистым» Dart SDK без Flutter (см. test/run_dart_tests.dart):
+//   dart run test/run_dart_tests.dart
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vremya_remindme/domain/time_parser.dart';
+import 'package:ru_vremya_remindme/domain/time_parser.dart';
 
 // Fixed clock: absolute-date expectations must not change after 15 October.
 final now = DateTime(2026, 10, 7, 12, 0, 0);
@@ -127,7 +130,7 @@ void main() {
         expect(got, c.expectWhen);
       }
       expect(
-        norm(r.text).contains(norm(c.expectText).substring(0, 8)),
+        norm(r.text).contains(norm(c.expectText).substring(0, c.expectText.length.clamp(0, 8))),
         isTrue,
         reason: 'text="${r.text}" expected to contain "${c.expectText}"',
       );

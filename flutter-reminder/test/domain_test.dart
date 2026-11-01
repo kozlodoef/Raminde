@@ -1,8 +1,10 @@
 // test/domain_test.dart — тесты планировщика и freemium-логики.
+//
+// Запуск на машине с Flutter SDK:  cd flutter-reminder && flutter test
 import 'package:flutter_test/flutter_test.dart';
-import 'package:vremya_remindme/domain/access.dart';
-import 'package:vremya_remindme/domain/reminder.dart';
-import 'package:vremya_remindme/domain/scheduler.dart';
+import 'package:ru_vremya_remindme/domain/access.dart';
+import 'package:ru_vremya_remindme/domain/reminder.dart';
+import 'package:ru_vremya_remindme/domain/scheduler.dart';
 
 void main() {
   group('scheduler', () {
@@ -27,11 +29,7 @@ void main() {
       final list = [
         Reminder(id: 'a', text: 'past', when: DateTime(2026, 11, 2, 11)),
         Reminder(id: 'b', text: 'future', when: DateTime(2026, 11, 2, 13)),
-        Reminder(
-            id: 'c',
-            text: 'done',
-            when: DateTime(2026, 11, 2, 10),
-            done: true),
+        Reminder(id: 'c', text: 'done', when: DateTime(2026, 11, 2, 10), done: true),
       ];
       expect(dueReminders(list, now: now).map((r) => r.id).toList(), ['a']);
     });
@@ -39,7 +37,7 @@ void main() {
 
   group('access (freemium)', () {
     test('free limit is 3 active reminders', () {
-      expect(canCreateReminder(0, false(isPro: false)), isTrue);
+      expect(canCreateReminder(0, false), isTrue);
       expect(canCreateReminder(2, false), isTrue);
       expect(canCreateReminder(3, false), isFalse);
       expect(canCreateReminder(50, true), isTrue);
