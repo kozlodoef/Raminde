@@ -4,6 +4,7 @@
 // срабатывания, повторы, выполнено ли. Хранение — SQLite (см. data/store.dart),
 // а не localStorage: это было главным архитектурным риском старой версии.
 
+/// Напоминание (аналог записи storage.js).
 class Reminder {
   final String id;
 

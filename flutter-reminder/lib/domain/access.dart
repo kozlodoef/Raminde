@@ -27,7 +27,8 @@ class AccessStatus {
 }
 
 /// Можно ли создать ещё одно напоминание при текущем их количестве [count].
-bool canCreateFree(int count, bool isPro) => isPro || count < freeReminderLimit;
+bool canCreateReminder(int count, bool isPro) =>
+    isPro || count < freeReminderLimit;
 
 /// Разрешено ли повторное напоминание ([repeats] > [freeRepeatLimit]) только с PRO.
 bool canRepeat(bool isPro, int repeats) => isPro || repeats <= freeRepeatLimit;

@@ -122,7 +122,12 @@ final String numAlt = r'\d{1,2}|' + joinKeys(numWords);
 // первым, альтернатива «три» совпадёт внутри слова «тридцать» и число
 // посчитается как 3 вместо 30.
 final String tenWords = grp('${joinKeys(tens)}|пятьдесят');
-final String numExpr = grp(grp('$tenWords${grp('[- ]$numAlt')}?') + '|$numAlt');
+// Полная форма «десяток [пробел/дефис число]» — как NUM_EXPR в JS:
+// сначала составные («двадцать пять»), затем голое слово («тридцать»),
+// затем одиночные слова/цифры. Порядок важен: короткие альтернативы не
+// должны съедать префикс длинных слов («три» внутри «тридцать»).
+final String numExpr = grp(
+    grp(grp('$tenWords${grp('[- ]$numAlt')}?') + '|$numAlt'));
 
 class _Span {
   int index;
@@ -221,8 +226,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
   // «<десяток> <число>» ПЕРЕД numExpr — иначе фраза не распознаётся целиком.
   if (relResult == null) {
     final m = RegExp(w('через') +
-            r'\s+(полторы|полтора|' +
-            tenWords + r'[- ]' + numAlt + r'|' + numExpr + r')\s+(' + unit + ')' + wbR)
+            r'\s+(полторы|полтора|' + numExpr + r')\s+(' + unit + ')' + wbR)
         .firstMatch(s);
     if (m != null) applyRel(m, m.group(1)!);
   }
