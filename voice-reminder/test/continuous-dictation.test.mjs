@@ -75,6 +75,13 @@ test("native mode keeps one recognizer after a pause", async () => {
   d.stop();
   assert.equal(await d.promise, "Медленная фраза");
 });
+test("native mode resolves the task after Done", async () => {
+  const f = fake(),
+    d = startContinuousDictation({ start: f.start, restartOnEnd: false });
+  await until(() => f.cycles.length === 1);
+  f.cycles[0].yes("Финальная фраза");
+  assert.equal(await d.promise, "Финальная фраза");
+});
 test("Done in a gap prevents the next restart", async () => {
   const f = fake();
   let waiting = false;

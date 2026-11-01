@@ -76,6 +76,7 @@ export function startContinuousDictation({
       failures = 0;
       if (!restartOnEnd) {
         onWaiting?.();
+        done();
         return;
       }
     } catch (error) {
