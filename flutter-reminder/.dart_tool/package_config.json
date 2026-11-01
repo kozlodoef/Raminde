@@ -1,0 +1,6 @@
+{
+  "configVersion": 2,
+  "packages": [
+    { "name": "ru_vremya_remindme", "rootUri": "../", "packageUri": "lib/", "languageVersion": "3.5" }
+  ]
+}

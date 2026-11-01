@@ -9,6 +9,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  flutter_localizations:
+    sdk: flutter
 
   # Хранение напоминаний/настроек/статуса PRO (аналог storage.js + SQLite из плана)
   sqflite: ^2.4.1

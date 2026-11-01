@@ -127,7 +127,7 @@ final String tenWords = grp('${joinKeys(tens)}|пятьдесят');
 // затем одиночные слова/цифры. Порядок важен: короткие альтернативы не
 // должны съедать префикс длинных слов («три» внутри «тридцать»).
 final String numExpr = grp(
-    grp(grp('$tenWords${grp('[- ]$numAlt')}?') + '|$numAlt'));
+    grp(grp('$tenWords${grp('[- ]' + grp(numAlt))}?') + '|$numAlt'));
 
 class _Span {
   int index;
