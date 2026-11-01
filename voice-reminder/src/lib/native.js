@@ -12,20 +12,20 @@ let nativePromise = null;
 
 /** Запущено ли приложение внутри нативной оболочки (Android/iOS). */
 export function isNative() {
-  if (typeof window === 'undefined') return false;
+  if (typeof window === "undefined") return false;
   const cap = window.Capacitor;
   if (!cap) return false;
   // В вебе Capacitor тоже может присутствовать, поэтому проверяем платформу.
   const platform = cap.getPlatform ? cap.getPlatform() : cap.platform;
-  if (platform && platform !== 'web') return true;
-  return !!cap.isNativePlatform;
+  if (platform) return platform !== "web";
+  return typeof cap.isNativePlatform === "function" && cap.isNativePlatform();
 }
 
 /** Имя платформы: 'android' | 'ios' | 'web'. */
 export function platformName() {
-  const cap = typeof window !== 'undefined' ? window.Capacitor : null;
-  if (!cap) return 'web';
-  return (cap.getPlatform ? cap.getPlatform() : cap.platform) || 'web';
+  const cap = typeof window !== "undefined" ? window.Capacitor : null;
+  if (!cap) return "web";
+  return (cap.getPlatform ? cap.getPlatform() : cap.platform) || "web";
 }
 
 /**
@@ -35,12 +35,12 @@ export function platformName() {
  */
 export async function getPlugin(registeredName) {
   if (!isNative()) return null;
-  if (!nativePromise) nativePromise = import('@capacitor/core');
+  if (!nativePromise) nativePromise = import("@capacitor/core");
   try {
     const core = await nativePromise;
     return core.registerPlugin(registeredName);
   } catch (e) {
-    console.warn('Нативный плагин недоступен:', registeredName, e);
+    console.warn("Нативный плагин недоступен:", registeredName, e);
     return null;
   }
 }
@@ -52,8 +52,8 @@ export function toTime(when) {
     const t = when.getTime();
     return Number.isFinite(t) ? t : null;
   }
-  if (typeof when === 'string' || typeof when === 'number') {
-    if (typeof when === 'string' && when.trim() === '') return null;
+  if (typeof when === "string" || typeof when === "number") {
+    if (typeof when === "string" && when.trim() === "") return null;
     const t = new Date(when).getTime();
     return Number.isFinite(t) ? t : null;
   }

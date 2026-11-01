@@ -1,6 +1,6 @@
 {
   "appId": "ru.voicereminder.app",
-  "appName": "Голосовая напоминалка",
+  "appName": "Remind me",
   "webDir": "dist",
   "android": {
     "allowMixedContent": false
