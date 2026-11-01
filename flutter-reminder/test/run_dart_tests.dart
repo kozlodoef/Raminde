@@ -18,9 +18,11 @@ int _passed = 0;
 int _failed = 0;
 final List<String> _failures = [];
 
-void check(String name, bool Function() body) {
+void check(String name, Object body) {
+  // body — либо bool, либо bool Function() (для отложенных проверок).
+  final bool Function() f = body is bool ? () => body : body as bool Function();
   try {
-    if (body()) {
+    if (f()) {
       _passed++;
     } else {
       _failed++;
@@ -232,6 +234,193 @@ void main() {
   });
 
   check('reminder: newId unique-ish', () => newId() != newId());
+
+  // =====================================================================
+  // Порт test-scheduler.mjs (23 проверки JS-харнеса) — planTimer/toTime.
+  // В Dart DateTime локальный, поэтому at(y,m,d,hh,mm) = new Date(...) в JS.
+  // =====================================================================
+  final MIN = const Duration(minutes: 1).inMilliseconds;
+  final HOUR = const Duration(hours: 1).inMilliseconds;
+  final DAY = const Duration(days: 1).inMilliseconds;
+  DateTime at(int y, int m, int d, int hh, [int mm = 0]) =>
+      DateTime(y, m, d, hh, mm);
+
+  ({String kind, int delay}) pt(Object? when, DateTime nowArg) =>
+      planTimer(when, nowArg);
+
+  // --- 1. Напоминание на 23:59 того же дня ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    final p = pt(at(2026, 10, 7, 23, 59), n);
+    check('planTimer: 23:59 того же дня → wait', () => p.kind == 'wait');
+    check('planTimer: 23:59 задержка = 11ч59м',
+        p.delay == 11 * HOUR + 59 * MIN);
+  }
+
+  // --- 2. Переход через сутки: 23:59 → 00:01 ---
+  {
+    final n = at(2026, 10, 7, 23, 59);
+    final p = pt(at(2026, 10, 8, 0, 1), n);
+    check('planTimer: через полночь (23:59 → 00:01) = 2 мин',
+        p.kind == 'wait' && p.delay == 2 * MIN);
+  }
+
+  // --- 3. Ровно сейчас ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    check('planTimer: ровно сейчас → fire', pt(n, n).kind == 'fire');
+  }
+
+  // --- 4. Просроченное (в т.ч. на сутки) ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    final p = pt(at(2026, 10, 6, 9, 0), n);
+    check('planTimer: просроченное на сутки → fire', p.kind == 'fire');
+    check('planTimer: просроченное — задержка без переполнения',
+        p.delay == 0);
+  }
+
+  // --- 5. Граница лимита maxTimeout ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    check('planTimer: ровно на лимите → wait',
+        pt(DateTime.fromMillisecondsSinceEpoch(
+            n.millisecondsSinceEpoch + maxTimeout), n).kind == 'wait');
+    check('planTimer: на 1 мс больше лимита → defer',
+        pt(DateTime.fromMillisecondsSinceEpoch(
+            n.millisecondsSinceEpoch + maxTimeout + 1), n).kind == 'defer');
+  }
+
+  // --- 6. Очень далёкое будущее ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    final p = pt(at(2027, 10, 7, 12, 0), n); // +1 год
+    check('planTimer: через год → defer', p.kind == 'defer');
+    check('planTimer: defer — задержка = maxTimeout', p.delay == maxTimeout);
+    check('planTimer: год > лимита (запас корректен)', 365 * DAY > maxTimeout);
+  }
+
+  // --- 7. Некорректные данные не должны ставить «мгновенный» таймер ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    for (final bad in <Object?>[
+      'не дата', '', null, <String, String>{}, double.nan, <int>[1]
+    ]) {
+      final label = bad is Map ? '{}' : bad is List ? '[1]' : '$bad';
+      check('planTimer: некорректная дата ($label) → invalid',
+          pt(bad, n).kind == 'invalid');
+    }
+  }
+
+  // --- 8. Строки ISO (как хранит приложение) ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    final iso = at(2026, 10, 7, 13, 30).toUtc().toIso8601String();
+    // toTime парсит UTC-ISO → локальное время: эквивалент new Date(iso) в JS.
+    final p = pt(iso, n);
+    check('planTimer: ISO-строка → wait 1ч30м',
+        p.kind == 'wait' && p.delay == 90 * MIN);
+    check('planTimer: ISO-строка просрочена → fire',
+        pt(DateTime.fromMillisecondsSinceEpoch(n.millisecondsSinceEpoch - 1000)
+            .toUtc()
+            .toIso8601String(), n).kind == 'fire');
+  }
+
+  // --- 9. dueReminders: что показывать сразу ---
+  {
+    final n = at(2026, 10, 7, 12, 0);
+    final list = [
+      Reminder(id: 'a', text: '', when: n.subtract(const Duration(seconds: 5))),
+      Reminder(id: 'b', text: '', when: n.add(const Duration(hours: 1))),
+      Reminder(id: 'c', text: '', when: n.subtract(const Duration(seconds: 5)), done: true),
+      Reminder(id: 'e', text: '', when: n),
+    ];
+    final ids = dueReminders(list, now: n).map((r) => r.id).toList();
+    check('dueReminders: только просроченные и активные',
+        ids.join(',') == 'a,e');
+    check('dueReminders: пустой список безопасен',
+        dueReminders([], now: n).isEmpty);
+    check('dueReminders: null безопасен', dueReminders(null, now: n).isEmpty);
+  }
+
+  // --- 10. Смена суток на границе месяца и года ---
+  {
+    final n = at(2026, 12, 31, 23, 30);
+    final p = pt(at(2027, 1, 1, 0, 15), n);
+    check('planTimer: через Новый год = 45 мин',
+        p.kind == 'wait' && p.delay == 45 * MIN);
+  }
+
+  // =====================================================================
+  // Дополнительные кейсы парсера: покрытие ветвей timeParser.js, которые
+  // не были в исходном test-parser.mjs (42 кейса). Ожидания получены
+  // прогоном эталонного JS-парсера при зафиксированной дате
+  // now = 2026-10-07 12:00 — то есть это порт поведения, а не догадка.
+  // Формат: [фраза, ожидаемое when ("—" — зависит от времени), текст, допуск]
+  // =====================================================================
+  final extraCases = <List<String?>>[
+    ['напомни через час', '2026-10-07 13:00', 'Напоминание'],
+    ['напомни через полтора часа', '2026-10-07 13:30', 'Напоминание'],
+    ['напомни через полторы минуты', '2026-10-07 12:01', 'Напоминание'],
+    ['напомни через 90 минут', '2026-10-07 13:30', 'Напоминание'],
+    ['напомни через 25 минут', '2026-10-07 12:25', 'Напоминание'],
+    ['напомни через два дня', '2026-10-09 12:00', 'Напоминание'],
+    ['напомни через две недели', '2026-10-21 12:00', 'Напоминание'],
+    ['напомни через три секунды', '2026-10-07 12:00', 'Напоминание'],
+    ['напомни завтра', '2026-10-08 09:00', 'Напоминание'],
+    ['напомни сегодня вечером', '2026-10-07 19:00', 'Напоминание'],
+    ['напомни вчера утром', '2026-10-06 09:00', 'Напоминание'],
+    ['напомни в час ночи позвонить', '2026-10-08 01:00', 'Позвонить'],
+    ['напомни в пять утра зарядка', '2026-10-08 05:00', 'Зарядка'],
+    ['напомни в шесть сорок', '2026-10-07 18:40', 'Напоминание'],
+    ['напомни в десять с четвертью', '2026-10-07 22:15', 'Напоминание'],
+    ['напомни без двадцати пять', '2026-10-07 16:40', 'Напоминание'],
+    ['напомни в половине восьмого', '2026-10-07 19:30', 'Напоминание'],
+    ['напомни в полдевятого', '2026-10-07 20:30', 'Напоминание'],
+    ['напомни ровно в восемь', '2026-10-07 20:00', 'Напоминание'],
+    ['напомни где-то в семь', '2026-10-07 19:00', 'Напоминание'],
+    ['напомни около десяти', '2026-10-07 22:00', 'Напоминание'],
+    ['напомни в полночь', '2026-10-08 00:00', 'Напоминание'],
+    ['напомни в двенадцать ночи', '2026-10-08 00:00', 'Напоминание'],
+    ['напомни в двенадцать дня', '2026-10-07 12:00', 'Напоминание'],
+    ['напомни послезавтра утром', '2026-10-09 09:00', 'Напоминание'],
+    ['напомни в понедельник в 10 утра планерка', '2026-10-12 10:00', 'Планерка'],
+    ['напомни в следующий вторник в 9', '2026-10-13 09:00', 'Напоминание'],
+    ['напомни 15 октября', '2026-10-15 09:00', 'Напоминание'],
+    ['напомни пятое ноября в 10 утра', '2026-11-05 10:00', 'Напоминание'],
+    ['напомни 15.10 в 10 утра сдать отчет', '2026-10-15 10:00', 'Сдать отчет'],
+    ['напомни 31.02 в 9 утра позвонить врачу', null, 'Такой даты не существует'],
+    ['напомни завтра послезавтра', '2026-10-08 09:00', 'Послезавтра'],
+    ['просто текст без напоминания', '2026-10-07 13:00', 'Просто текст'],
+  ];
+
+  for (final c in extraCases) {
+    check('parser+: ${c[0]}', () {
+      if (c[0] == null) throw StateError('null phrase');
+      final r = parseReminder(c[0]!, now);
+      // Ожидаемый текст действия (может быть null — не проверяем).
+      final wantText = c[2];
+      if (wantText != null && wantText.isNotEmpty) {
+        final probe = norm(wantText).substring(0, wantText.length.clamp(0, 8));
+        if (!norm(r.text).contains(probe)) {
+          throw StateError('text="${r.text}" expected to contain "$wantText"');
+        }
+      }
+      // Ожидаемое when (null — зависит от текущего времени, не проверяем).
+      final wantWhen = c[1];
+      if (wantWhen != null) {
+        if (r.when == null) throw StateError('when=null, expected $wantWhen');
+        final exp = _parseFmt(wantWhen);
+        final diff = r.when!.difference(exp).inMinutes.abs();
+        if (diff > tol) {
+          throw StateError('${fmt(r.when)} vs $wantWhen (Δ=${diff}мин > $tol)');
+        }
+      } else if (r.when == null && wantText == null) {
+        throw StateError('unexpected null when');
+      }
+      return true;
+    });
+  }
 
   // ---- Итог ----
   print('========================================');
