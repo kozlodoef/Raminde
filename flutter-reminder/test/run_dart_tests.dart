@@ -358,7 +358,11 @@ void main() {
   // now = 2026-10-07 12:00 — то есть это порт поведения, а не догадка.
   // Формат: [фраза, ожидаемое when ("—" — зависит от времени), текст, допуск]
   // =====================================================================
-  final extraCases = <List<String?>>[
+  // Формат: [фраза, ожидаемое when, ожидаемый текст]. Все ожидания — это
+  // ЭТАЛОННЫЕ выходы того же парсера при зафиксированном now
+  // (2026-10-07 12:00), полученные прогоном; они не зависят от системных
+  // часов и потому воспроизводимы на любой машине.
+  final extraCases = <List<String>>[
     ['напомни через час', '2026-10-07 13:00', 'Напоминание'],
     ['напомни через полтора часа', '2026-10-07 13:30', 'Напоминание'],
     ['напомни через полторы минуты', '2026-10-07 12:01', 'Напоминание'],
@@ -389,34 +393,31 @@ void main() {
     ['напомни 15 октября', '2026-10-15 09:00', 'Напоминание'],
     ['напомни пятое ноября в 10 утра', '2026-11-05 10:00', 'Напоминание'],
     ['напомни 15.10 в 10 утра сдать отчет', '2026-10-15 10:00', 'Сдать отчет'],
-    ['напомни 31.02 в 9 утра позвонить врачу', null, 'Такой даты не существует'],
+    ['напомни 31.02 в 9 утра позвонить врачу', '', 'Такой даты не существует'],
     ['напомни завтра послезавтра', '2026-10-08 09:00', 'Послезавтра'],
     ['просто текст без напоминания', '2026-10-07 13:00', 'Просто текст'],
   ];
 
   for (final c in extraCases) {
     check('parser+: ${c[0]}', () {
-      if (c[0] == null) throw StateError('null phrase');
-      final r = parseReminder(c[0]!, now);
-      // Ожидаемый текст действия (может быть null — не проверяем).
+      final r = parseReminder(c[0], now);
+      // Текст/ошибка.
       final wantText = c[2];
-      if (wantText != null && wantText.isNotEmpty) {
-        final probe = norm(wantText).substring(0, wantText.length.clamp(0, 8));
-        if (!norm(r.text).contains(probe)) {
-          throw StateError('text="${r.text}" expected to contain "$wantText"');
-        }
+      if (!norm(r.text).contains(norm(wantText))) {
+        throw StateError('text="${r.text}" expected to contain "$wantText"');
       }
-      // Ожидаемое when (null — зависит от текущего времени, не проверяем).
-      final wantWhen = c[1];
-      if (wantWhen != null) {
-        if (r.when == null) throw StateError('when=null, expected $wantWhen');
-        final exp = _parseFmt(wantWhen);
+      // When: пустая строка — when должен отсутствовать (случай ошибки).
+      if (c[1].isEmpty) {
+        if (r.when != null) {
+          throw StateError('expected when=null, got ${fmt(r.when)}');
+        }
+      } else {
+        if (r.when == null) throw StateError('when=null, expected ${c[1]}');
+        final exp = _parseFmt(c[1]);
         final diff = r.when!.difference(exp).inMinutes.abs();
         if (diff > tol) {
-          throw StateError('${fmt(r.when)} vs $wantWhen (Δ=${diff}мин > $tol)');
+          throw StateError('${fmt(r.when)} vs ${c[1]} (Δ=${diff}мин > $tol)');
         }
-      } else if (r.when == null && wantText == null) {
-        throw StateError('unexpected null when');
       }
       return true;
     });
