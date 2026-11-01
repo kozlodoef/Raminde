@@ -23,3 +23,13 @@ export function trialAccess(existing, now = Date.now()) {
 export function accessActive(access, now = Date.now()) {
   return (access?.trialEndsAt || 0) > now || (access?.paidUntil || 0) > now;
 }
+// Freemium: бесплатная версия работает всегда, но с ограничением числа
+// активных напоминаний. PRO снимает лимиты.
+export const FREE_REMINDER_LIMIT = 3;
+export const FREE_REPEAT_LIMIT = 1;
+export function proActive(access, now = Date.now()) {
+  return (access?.paidUntil || 0) > now;
+}
+export function canCreateFree(count, pro) {
+  return pro || count < FREE_REMINDER_LIMIT;
+}
