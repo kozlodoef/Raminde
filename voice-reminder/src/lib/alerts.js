@@ -170,3 +170,32 @@ export async function playRecordingCue() {
     /* Muted/blocked browser audio must not prevent recording. */
   }
 }
+
+/** Separate confirmation cue for the Done button. */
+export async function playDictationDoneCue() {
+  try {
+    const c = ctx();
+    if (c.state !== "running") return;
+    const master = c.createGain();
+    master.gain.value = 0.12;
+    master.connect(c.destination);
+    const tone = (frequency, at, duration) => {
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.type = "triangle";
+      o.frequency.value = frequency;
+      g.gain.setValueAtTime(0.0001, at);
+      g.gain.exponentialRampToValueAtTime(1, at + 0.015);
+      g.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+      o.connect(g);
+      g.connect(master);
+      o.start(at);
+      o.stop(at + duration + 0.03);
+    };
+    const t = c.currentTime;
+    tone(660, t, 0.12);
+    tone(440, t + 0.14, 0.18);
+    await new Promise((resolve) => setTimeout(resolve, 360));
+    master.disconnect();
+  } catch (_) {}
+}

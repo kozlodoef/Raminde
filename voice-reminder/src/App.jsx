@@ -9,7 +9,7 @@ import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startContinuousDictation } from "./lib/continuous-dictation.js";
 import { finishDictation } from "./lib/finish-dictation.js";
-import { primeAudio, playRecordingCue } from "./lib/alerts.js";
+import { primeAudio, playRecordingCue, playDictationDoneCue } from "./lib/alerts.js";
 import Calendar from "./PlannerCalendar.jsx";
 import { assertDailyCapacity } from "./domain/day-capacity.js";
 import {
@@ -403,6 +403,7 @@ export default function App() {
           task: recognitionTask.current,
           session: () => recording.current,
         });
+        if (!isNative()) await playDictationDoneCue();
         if (!recognized && !draftRef.current.text?.trim())
           throw Error(
             "Речь не распознана. Нажмите «Начать» или напечатайте напоминание.",
