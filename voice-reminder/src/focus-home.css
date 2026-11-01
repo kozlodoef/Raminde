@@ -1,0 +1,317 @@
+/* Main screen v1.5 — a single editor, a single action, a compact calendar. */
+.planner {
+  padding-bottom: max(20px, env(safe-area-inset-bottom));
+}
+.planner.home-screen {
+  height: 100vh;
+  height: 100dvh;
+  min-height: 0;
+  padding: max(10px, env(safe-area-inset-top)) 16px
+    max(12px, env(safe-area-inset-bottom));
+  overflow: hidden;
+}
+.home-screen .planner-content {
+  height: 100%;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+}
+.focus-home {
+  height: 100%;
+  max-width: 540px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+.focus-header {
+  flex: 0 0 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.focus-header .brand-wordmark {
+  font-size: 32px;
+  line-height: 1;
+  color: var(--text);
+}
+.focus-header .brand-wordmark span {
+  color: #608700;
+}
+.focus-header .settings-link {
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  padding: 10px;
+  background: var(--surface);
+}
+.focus-editor {
+  flex: 1 1 150px;
+  min-height: 60px;
+  position: relative;
+  padding: 24px 20px 20px;
+  background: #10243b;
+  color: #fffaf0;
+  border-radius: 26px;
+}
+.clear-editor {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 44px;
+  height: 44px;
+  padding: 11px;
+  color: #d4e3eb;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  z-index: 1;
+}
+.clear-editor:hover {
+  background: #ffffff12;
+}
+.focus-editor textarea {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  padding: 0 30px 0 0;
+  margin: 0;
+  resize: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  color: #fffaf0;
+  background: transparent;
+  font:
+    500 23px/1.5 "Manrope",
+    sans-serif;
+  overflow-wrap: anywhere;
+}
+.focus-editor textarea::placeholder {
+  color: #b9cbd5;
+  opacity: 1;
+  font-size: 17px;
+  line-height: 1.65;
+  font-weight: 400;
+}
+.focus-editor textarea:focus {
+  outline: none;
+  box-shadow: none;
+}
+.focus-editor:focus-within {
+  box-shadow: inset 0 0 0 2px #7ed8f6;
+}
+.focus-record {
+  flex: 0 0 54px;
+  border: 1px solid #192e36;
+  width: 100%;
+  border-radius: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 800;
+  transition:
+    background 0.18s,
+    color 0.18s;
+}
+.focus-record.is-ready {
+  background: #d9f34f;
+  color: #192e36;
+}
+.focus-record.is-recording {
+  background: #7ed8f6;
+  color: #10243b;
+}
+.record-symbol {
+  font-size: 17px;
+}
+.focus-home .month-card {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  padding: 8px 8px 6px;
+  border-radius: 24px;
+  margin: 0;
+}
+.focus-home .month-card header {
+  height: 44px;
+  min-height: 44px;
+  margin: 0;
+  padding: 0;
+}
+.focus-home .month-card h2 {
+  font-size: 26px;
+  line-height: 1.2;
+  margin: 0;
+  text-transform: capitalize;
+}
+.focus-home .month-card .weekdays {
+  height: 25px;
+  margin: 0;
+  align-items: center;
+  font-size: 13px;
+}
+.focus-home .month-card .days {
+  grid-auto-rows: 44px;
+  gap: 0;
+  margin: 0;
+}
+.focus-home .month-card .day {
+  height: 44px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  margin: 0;
+  font-size: 16px;
+}
+.focus-home .day-ring {
+  width: 42px;
+  height: 42px;
+}
+.floating-bubble {
+  position: fixed;
+  z-index: 100;
+  top: max(68px, calc(env(safe-area-inset-top) + 60px));
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(440px, calc(100vw - 32px));
+  padding: 14px 12px 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 23px;
+  box-shadow: 0 10px 35px #10243b26;
+  font-size: 14px;
+  line-height: 1.55;
+  animation: bubble-appear 0.2s ease-out;
+}
+.floating-bubble span {
+  flex: 1;
+}
+.floating-bubble .icon-button {
+  flex-shrink: 0;
+  min-width: 44px;
+  min-height: 44px;
+}
+.conflict-bubble {
+  flex-wrap: wrap;
+  z-index: 101;
+}
+.conflict-bubble p {
+  flex: 0 0 100%;
+  margin: 0 0 6px;
+}
+.conflict-bubble button {
+  flex: 1;
+  min-height: 44px;
+  font-size: 13px;
+}
+.back-home {
+  white-space: nowrap;
+  min-height: 44px;
+}
+@keyframes bubble-appear {
+  from {
+    opacity: 0;
+    margin-top: -8px;
+  }
+  to {
+    opacity: 1;
+    margin-top: 0;
+  }
+}
+@media (max-height: 700px) and (max-width: 699px) {
+  .planner.home-screen {
+    padding: 8px 12px;
+  }
+  .focus-home {
+    gap: 8px;
+  }
+  .focus-editor {
+    padding: 16px;
+    border-radius: 22px;
+  }
+  .focus-editor textarea {
+    font-size: 19px;
+  }
+  .focus-editor textarea::placeholder {
+    font-size: 15px;
+    line-height: 1.5;
+  }
+  .focus-record {
+    flex-basis: 48px;
+  }
+  .focus-home .month-card h2 {
+    font-size: 24px;
+  }
+}
+@media (min-width: 700px) and (min-height: 500px),
+  (orientation: landscape) and (max-height: 499px) {
+  .focus-home {
+    max-width: 1040px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: 44px minmax(60px, 1fr) 54px;
+    gap: 16px 24px;
+  }
+  .focus-header {
+    grid-column: 1 / -1;
+  }
+  .focus-editor {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .focus-record {
+    grid-column: 1;
+    grid-row: 3;
+  }
+  .focus-home .month-card {
+    grid-column: 2;
+    grid-row: 2 / 4;
+    align-self: start;
+  }
+}
+@media (orientation: landscape) and (max-height: 499px) {
+  .planner.home-screen {
+    padding: 6px 12px;
+  }
+  .focus-home {
+    gap: 6px 14px;
+    grid-template-rows: 44px minmax(30px, 1fr) 44px;
+  }
+  .focus-home .month-card .days {
+    grid-auto-rows: min(44px, calc((100vh - 150px) / 6));
+    grid-auto-rows: min(44px, calc((100dvh - 150px) / 6));
+  }
+  .focus-home .month-card .day {
+    height: 100%;
+    min-height: 0;
+  }
+  .focus-home .day-ring {
+    width: 32px;
+    height: 32px;
+  }
+  .focus-editor textarea::placeholder {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .floating-bubble {
+    animation: none;
+  }
+  .focus-record {
+    transition: none;
+  }
+}

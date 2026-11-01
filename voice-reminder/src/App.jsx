@@ -1,5 +1,10 @@
 import { eventCardStyle } from "./lib/event-colors.js";
-import { isComposingReminder } from "./domain/draft-mode.js";
+import {
+  editorPhrase,
+  parseEditor,
+  toggleEditorDate,
+  sessionGate,
+} from "./domain/home-editor.js";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startContinuousDictation } from "./lib/continuous-dictation.js";
@@ -8,7 +13,6 @@ import { primeAudio, playRecordingCue } from "./lib/alerts.js";
 import Calendar from "./PlannerCalendar.jsx";
 import { assertDailyCapacity } from "./domain/day-capacity.js";
 import {
-  defaults,
   getState,
   setSettings,
   putReminder,
@@ -26,13 +30,11 @@ import {
   defaultSchedule,
   describe,
   shortTime,
-  nextOccurrences,
   pad,
 } from "./domain/calendar.js";
 import {
   COLORS,
   colorFor,
-  parseGroup,
   buildGroup,
   occurrencesInMonth,
 } from "./domain/groups.js";
@@ -47,13 +49,7 @@ import {
   recoveryKey,
   restoreKey,
 } from "./domain/billing.js";
-import {
-  Modal,
-  Toggle,
-  EditReminder,
-  AlarmBox,
-  Icon,
-} from "./ReminderControls.jsx";
+import { Modal, Toggle, AlarmBox, Icon } from "./ReminderControls.jsx";
 import "./planner.css";
 const uid = () => crypto.randomUUID();
 const eventCount = (n) =>
@@ -61,6 +57,8 @@ const eventCount = (n) =>
 const blank = (index = 0) => ({
   id: uid(),
   text: "",
+  phrase: "",
+  selectedDates: [],
   dates: [],
   times: [],
   color: COLORS[index % COLORS.length],
@@ -110,8 +108,7 @@ export default function App() {
     [tab, setTab] = useState("home"),
     [month, setMonth] = useState(localDate().slice(0, 7)),
     [draft, setDraft] = useState(() => cachedDrafts().draft || blank()),
-    [queue, setQueue] = useState(() => cachedDrafts().queue || []),
-    [creating, setCreating] = useState(() => !!cachedDrafts().creating),
+    [creating, setCreating] = useState(false),
     [voice, setVoice] = useState("idle"),
     [live, setLive] = useState(""),
     [message, setMessage] = useState(""),
@@ -120,7 +117,6 @@ export default function App() {
     [perms, setPerms] = useState(null),
     [bill, setBill] = useState(null),
     [name, setName] = useState(""),
-    [time, setTime] = useState("09:00"),
     [email, setEmail] = useState(""),
     [key, setKey] = useState(""),
     [editing, setEditing] = useState(null),
@@ -131,15 +127,28 @@ export default function App() {
     starting = useRef(false),
     recognitionTask = useRef(null),
     saving = useRef(false),
-    autoStarted = useRef(false),
+    gate = useRef(sessionGate()),
     parsedTranscript = useRef("");
   draftRef.current = draft;
   useEffect(() => {
-    localStorage.setItem(
-      "raminde.drafts.v3",
-      JSON.stringify({ draft, queue, creating }),
-    );
-  }, [draft, queue, creating]);
+    const legacy = cachedDrafts();
+    if (
+      legacy.queue?.length &&
+      !localStorage.getItem("raminde.drafts.legacy-backup")
+    )
+      localStorage.setItem(
+        "raminde.drafts.legacy-backup",
+        JSON.stringify(legacy),
+      );
+  }, []);
+  useEffect(() => {
+    if (!message) return;
+    const timer = setTimeout(() => setMessage(""), 8000);
+    return () => clearTimeout(timer);
+  }, [message]);
+  useEffect(() => {
+    localStorage.setItem("raminde.drafts.v3", JSON.stringify({ draft }));
+  }, [draft]);
   const refresh = async () => {
     if (saving.current) return;
     try {
@@ -161,8 +170,8 @@ export default function App() {
     }, 1500);
     const visible = () => {
       if (document.hidden) {
-        recording.current?.abort();
-        setVoice("idle");
+        cancelRecording();
+        setCreating(false);
       } else {
         refresh();
         permissions()
@@ -174,7 +183,7 @@ export default function App() {
     return () => {
       mounted.current = false;
       clearInterval(id);
-      recording.current?.abort();
+      cancelRecording();
       document.removeEventListener("visibilitychange", visible);
     };
   }, []);
@@ -193,6 +202,15 @@ export default function App() {
   const alarm = state?.events.find((e) =>
     ["ringing", "waiting"].includes(e.state),
   );
+  function cancelRecording() {
+    gate.current.next();
+    const old = recording.current;
+    recording.current = null;
+    starting.current = false;
+    recognitionTask.current = null;
+    old?.abort();
+    if (mounted.current) setVoice("idle");
+  }
   function listen() {
     if (
       starting.current ||
@@ -201,127 +219,81 @@ export default function App() {
       saving.current
     )
       return;
-    autoStarted.current = true;
-    const task = runListen();
+    setCreating(true);
+    const token = gate.current.next();
+    const task = runListen(token);
     recognitionTask.current = task;
     return task;
   }
-  async function runListen() {
+  async function runListen(token) {
+    const valid = () => mounted.current && gate.current.valid(token);
     starting.current = true;
     setVoice("starting");
-    setMessage("");
     setLive("");
+    setMessage("");
     try {
       if (!isNative()) await playRecordingCue();
+      if (!valid()) return false;
       parsedTranscript.current = "";
       const applyTranscript = (text) => {
-        if (!mounted.current || !text || parsedTranscript.current === text)
-          return;
+        if (!valid() || !text || parsedTranscript.current === text) return;
         parsedTranscript.current = text;
-        const current = draftRef.current;
-        const parsed = {
-          ...current,
-          ...parseGroup(text, current.dates),
-          color: current.color,
-          id: current.id,
-        };
+        const parsed = parseEditor(text, draftRef.current);
         draftRef.current = parsed;
         setDraft(parsed);
         setLive(text);
       };
       const session = startContinuousDictation({
-        onStart: () => mounted.current && setVoice("listening"),
-        onWaiting: () => mounted.current && setVoice("restarting"),
-        onInterim: (t) => mounted.current && setLive(t),
+        onStart: () => valid() && setVoice("listening"),
+        onWaiting: () => valid() && setVoice("restarting"),
+        onInterim: (text) => valid() && setLive(text),
         onFinal: applyTranscript,
       });
       recording.current = session;
       const text = await session.promise;
-      if (!mounted.current) return;
+      if (!valid()) return false;
       if (text) {
         applyTranscript(text);
         return true;
       }
       return false;
     } catch (e) {
-      if (mounted.current)
+      if (valid())
         setMessage(
           e.message.includes("not-allowed")
-            ? "Разрешите микрофон. Можно также ввести текст вручную."
-            : "Не удалось распознать речь. Нажмите микрофон или введите текст.",
+            ? "Разрешите доступ к микрофону в настройках телефона. Или напечатайте напоминание."
+            : "Не удалось распознать речь. Нажмите «Начать» ещё раз или напечатайте текст.",
         );
+      return false;
     } finally {
-      recording.current = null;
-      starting.current = false;
-      if (mounted.current) setVoice("idle");
+      if (valid()) {
+        recording.current = null;
+        starting.current = false;
+        setVoice("idle");
+        if (!saving.current) setCreating(false);
+      }
     }
   }
+  // Never auto-start, including upgrades with the old autoListen preference enabled.
   useEffect(() => {
-    if (tab !== "home" || alarm) {
-      if (alarm) recording.current?.abort();
-      if (state?.settings.onboarded) autoStarted.current = true;
-      return;
+    if (alarm) {
+      cancelRecording();
+      setCreating(false);
     }
-    if (
-      autoStarted.current ||
-      !state?.settings.onboarded ||
-      !state.settings.autoListen ||
-      modal
-    )
-      return;
-    const t = setTimeout(() => {
-      if (!autoStarted.current && !document.hidden) listen();
-    }, 400);
-    return () => clearTimeout(t);
-  }, [
-    tab,
-    !!alarm,
-    state?.settings.onboarded,
-    state?.settings.autoListen,
-    modal,
-  ]);
-
-  const patch = (value) =>
-    setDraft((d) => ({
-      ...d,
-      ...value,
-      issues: value.dates
-        ? []
-        : value.times
-          ? (d.issues || []).filter(
-              (e) => !e.includes("время") && !e.includes("Во сколько"),
-            )
-          : value.text
-            ? (d.issues || []).filter(
-                (e) => !e.includes("о чём") && !e.includes("текст"),
-              )
-            : d.issues || [],
-      schedule: Object.prototype.hasOwnProperty.call(value, "schedule")
-        ? value.schedule
-        : d.schedule?.kind === "dates"
-          ? {
-              ...d.schedule,
-              dates: value.dates ?? d.dates,
-              times: value.times ?? d.times,
-            }
-          : d.schedule,
-    }));
-  const pick = (d) => {
-    if (
-      draftRef.current.schedule &&
-      draftRef.current.schedule.kind !== "dates"
-    ) {
-      setMessage(
-        "Для повторяющейся серии изменяйте правило в «Повторении». Для отдельных дат начните новый черновик.",
-      );
-      return;
-    }
-    patch({
-      dates: draft.dates.includes(d)
-        ? draft.dates.filter((x) => x !== d)
-        : [...draft.dates, d].sort(),
-      dateConflict: null,
-    });
+  }, [!!alarm]);
+  function typePhrase(phrase) {
+    const next = parseEditor(phrase, draftRef.current);
+    draftRef.current = next;
+    setDraft(next);
+    setLive("");
+    setCreating(!!phrase.trim());
+    setMessage("");
+  }
+  const pick = (date) => {
+    const next = toggleEditorDate(draftRef.current, date);
+    draftRef.current = next;
+    setDraft(next);
+    setMessage("");
   };
   const remindersKey = JSON.stringify([
     state?.reminders || [],
@@ -363,10 +335,12 @@ export default function App() {
   }, [draft]);
   const marks = useMemo(
     () => [
-      ...entries.filter((e) => !preview || e.reminderId !== preview.id),
-      ...occurrencesInMonth([...queue, ...(preview ? [preview] : [])], month),
+      ...entries.filter(
+        (e) => !creating || !preview || e.reminderId !== preview.id,
+      ),
+      ...occurrencesInMonth(preview && creating ? [preview] : [], month),
     ],
-    [entries, queue, preview, month],
+    [entries, preview, month, creating],
   );
   const setting = async (p) => {
     try {
@@ -376,28 +350,15 @@ export default function App() {
     }
   };
   function newDraft() {
-    if (recording.current || starting.current) {
-      setMessage("Сначала завершите диктовку кнопкой «Готово».");
-      return;
-    }
+    if (saving.current) return;
+    cancelRecording();
+    const fresh = blank(state?.reminders.length || 0);
+    draftRef.current = fresh;
+    setDraft(fresh);
     setCreating(false);
-    recording.current?.abort();
     setMessage("");
-    setDraft(blank((state?.reminders.length || 0) + queue.length + 1));
     setLive("");
     setEditing(null);
-  }
-  function add() {
-    try {
-      const r = buildGroup(draft, Date.now(), {
-        allowPast: state?.reminders.some((r) => r.id === draft.id),
-      });
-      setQueue((q) => [...q, r]);
-      newDraft();
-      setMessage("Добавлено в черновики. «Готово» сохранит все.");
-    } catch (e) {
-      setMessage(e.message);
-    }
   }
   async function persist(r) {
     let token;
@@ -433,6 +394,7 @@ export default function App() {
   }
   async function save() {
     if (saving.current) return;
+    document.activeElement?.blur?.();
     saving.current = true;
     setBusy(true);
     try {
@@ -441,49 +403,35 @@ export default function App() {
           task: recognitionTask.current,
           session: () => recording.current,
         });
-        if (!recognized && !draftRef.current.text?.trim() && !queue.length)
+        if (!recognized && !draftRef.current.text?.trim())
           throw Error(
-            "Речь не распознана. Повторите диктовку или введите напоминание вручную.",
+            "Речь не распознана. Нажмите «Начать» или напечатайте напоминание.",
           );
       }
       const current = draftRef.current;
-      const batch = [
-        ...queue,
-        ...(current.text.trim()
-          ? [
-              buildGroup(current, Date.now(), {
-                allowPast: state?.reminders.some((r) => r.id === current.id),
-              }),
-            ]
-          : []),
-      ];
-      if (!batch.length) throw Error("Добавьте событие и время");
-      for (const r of batch)
-        buildGroup(r, Date.now(), {
-          allowPast: state.reminders.some((x) => x.id === r.id),
-        });
-      assertDailyCapacity(state.reminders, batch, { events: state.events });
-      for (const r of batch) {
-        await persist(r);
-        setQueue((q) => q.filter((x) => x.id !== r.id));
-        if (r.id === current.id) {
-          const fresh = blank((state?.reminders.length || 0) + batch.length);
-          draftRef.current = fresh;
-          setDraft(fresh);
-          setLive("");
-        }
-      }
+      const rule = buildGroup(current, Date.now(), {
+        allowPast: state?.reminders.some((r) => r.id === current.id),
+      });
+      assertDailyCapacity(state.reminders, [rule], { events: state.events });
+      await persist(rule);
+      const fresh = blank(
+        state.reminders.length +
+          (state.reminders.some((r) => r.id === rule.id) ? 0 : 1),
+      );
+      draftRef.current = fresh;
+      setDraft(fresh);
+      setLive("");
       setCreating(false);
-      setMessage(`Сохранено групп: ${batch.length}`);
+      setMessage("Напоминание сохранено. " + describe(rule.schedule));
       setEditing(null);
-      setModal("saved");
     } catch (e) {
+      setCreating(false);
       setMessage(
         e.message === "SUBSCRIPTION"
           ? "Пробный месяц закончился. Нужна подписка."
           : e.message,
       );
-      setModal(e.message === "SUBSCRIPTION" ? "access" : "saveError");
+      if (e.message === "SUBSCRIPTION") setModal("access");
     } finally {
       saving.current = false;
       setBusy(false);
@@ -495,8 +443,10 @@ export default function App() {
       return;
     }
     recording.current?.abort();
+    setCreating(true);
     setDraft({
       ...r,
+      phrase: editorPhrase(r),
       dates:
         r.schedule.kind === "dates"
           ? r.schedule.dates
@@ -511,7 +461,7 @@ export default function App() {
       issues: [],
       dateConflict: null,
     });
-    setLive(r.originalTranscript || "");
+    setLive("");
     setEditing(r.id);
     setTab("home");
     if (r.schedule.kind === "dates") setMonth(r.schedule.dates[0].slice(0, 7));
@@ -525,14 +475,8 @@ export default function App() {
     );
   const settings = state.settings;
   const voiceActive = voice !== "idle";
-  const composing = isComposingReminder({
-    draft,
-    queue,
-    voice,
-    live,
-    started: creating,
-  });
-  const dates = draft.dates.length ? draft.dates : [localDate()];
+  const composing = creating || voiceActive;
+  const dates = draft.dates;
   const trial = bill?.trialEndsAt || state.access?.trialEndsAt,
     active = bill ? bill.active : accessActive(state.access);
   const daysLeft = Math.max(0, Math.ceil((trial - Date.now()) / 86400000));
@@ -543,8 +487,8 @@ export default function App() {
   return (
     <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
       <div className="planner-content">
-        {message && tab !== "home" && (
-          <div className="planner-notice" role="status">
+        {message && (
+          <div className="floating-bubble" role="status" aria-live="polite">
             <span>{message}</span>
             <button
               className="icon-button"
@@ -555,259 +499,77 @@ export default function App() {
             </button>
           </div>
         )}
-        {tab !== "home" && voiceActive && (
-          <div className="recording-banner" role="status">
-            <span>Диктовка включена</span>
-            <button className="primary" disabled={busy} onClick={save}>
-              Готово
-            </button>
-          </div>
-        )}
         {tab === "home" && (
-          <div className="home-layout">
-            <section className="voice-card">
-              <header>
-                <div className="voice-heading">
-                  <span className="brand-wordmark" aria-label="Remind me">remind me<span>.</span></span>
-                  <span className={"voice-status " + (voiceActive ? "live" : "")}>
-                  <i />
-                  {voice === "listening"
-                    ? "Слушаю"
-                    : voice === "starting"
-                      ? "Включаю микрофон…"
-                      : voice === "restarting"
-                        ? "Продолжаю диктовку…"
-                        : voice === "processing"
-                          ? "Разбираю…"
-                          : editing
-                            ? "Редактирование"
-                            : composing
-                              ? "Черновик напоминания"
-                              : "Ваши напоминания"}
-                  </span>
-                </div>
-                <button
-                  className="icon-button mic-small"
-                  disabled={voiceActive || busy}
-                  aria-label={
-                    voiceActive ? "Микрофон включён" : "Начать диктовку"
-                  }
-                  title={
-                    voiceActive
-                      ? "Завершите запись кнопкой «Готово»"
-                      : "Начать диктовку"
-                  }
-                  onClick={listen}
-                >
-                  <Icon name="mic" />
-                </button>
-              </header>
-              {live && (
-                <button
-                  className="transcript"
-                  aria-label="Полная расшифровка"
-                  onClick={() => setModal("transcript")}
-                  aria-live="polite"
-                >
-                  «{live}»
-                </button>
-              )}
+          <div className="focus-home">
+            <header className="focus-header">
+              <span className="brand-wordmark" aria-label="Remind me">
+                remind me<span>.</span>
+              </span>
+              <button
+                className="icon-button settings-link"
+                aria-label="Настройки"
+                disabled={voiceActive || busy}
+                onClick={() => {
+                  setTab("settings");
+                  setMessage("");
+                }}
+              >
+                <NavIcon name="settings" />
+              </button>
+            </header>
+            <section className="focus-editor" aria-label="Напоминание">
+              <button
+                className="icon-button clear-editor"
+                aria-label="Очистить напоминание"
+                disabled={busy}
+                onClick={newDraft}
+              >
+                <Icon name="close" />
+              </button>
               <label className="sr-only" htmlFor="event-text">
-                О чём напомнить
+                Текст напоминания и время
               </label>
               <textarea
                 id="event-text"
-                className={"event-text" + (!draft.text ? " is-empty" : "")}
-                rows={6}
-                value={draft.text}
-                placeholder="Сообщите, о чём хотите сделать напоминание, и укажите время. Затем выберите дату или даты на календаре. В конце нажмите «Готово»."
-                onChange={(e) => patch({ text: e.target.value })}
+                value={voiceActive && live ? live : editorPhrase(draft)}
+                readOnly={voiceActive || busy}
+                spellCheck="true"
+                placeholder="Сообщите, о чём напомнить и во сколько. Затем выберите даты на календаре и нажмите «Готово»."
+                onChange={(e) => typePhrase(e.target.value)}
               />
-              <div className="time-chips">
-                {draft.times.map((t) => (
-                  <button
-                    key={t}
-                    className="time-chip"
-                    aria-label={"Удалить время " + t}
-                    onClick={() => {
-                      const times = draft.times.filter((x) => x !== t);
-                      patch({
-                        times,
-                        schedule:
-                          draft.schedule?.kind === "calendar"
-                            ? { ...draft.schedule, times }
-                            : draft.schedule,
-                      });
-                    }}
-                  >
-                    {t}
-                    <span>×</span>
-                  </button>
-                ))}
-              </div>
-              <p className="draft-caption">
-                {draft.schedule && draft.schedule.kind !== "dates"
-                  ? describe(draft.schedule)
-                  : draft.dates.length
-                    ? `${draft.dates.length} дат · ${draft.times.length} времён · ${draft.dates.length * draft.times.length} срабатываний`
-                    : "По умолчанию — сегодня."}
-              </p>
-              {draft.dateConflict && (
-                <div className="date-conflict" role="alert">
-                  <p>Названные даты отличаются от выбранных.</p>
-                  <button
-                    className="text-button"
-                    onClick={() =>
-                      patch({
-                        dateConflict: null,
-                        ...(draft.dateConflict.recurring
-                          ? {
-                              schedule: null,
-                              dates: draft.dateConflict.calendarDates,
-                            }
-                          : {}),
-                      })
-                    }
-                  >
-                    Оставить календарь
-                  </button>
-                  <button
-                    className="text-button"
-                    onClick={() => {
-                      if (draft.dateConflict.recurring)
-                        patch({ dates: [], dateConflict: null });
-                      else
-                        patch({
-                          dates: [draft.dateConflict.spokenDate],
-                          schedule: draft.dateConflict.spokenSchedule || null,
-                          dateConflict: null,
-                        });
-                    }}
-                  >
-                    Использовать сказанное
-                  </button>
-                </div>
-              )}
-              {draft.issues?.length > 0 && (
-                <p className="error">{draft.issues.join(". ")}</p>
-              )}
-              <div className="draft-tools">
-                <button
-                  className="text-button"
-                  disabled={voiceActive}
-                  onClick={() => setModal("repeat")}
-                >
-                  Повторение
-                </button>
-                <button
-                  className="text-button"
-                  onClick={() => setModal("time")}
-                >
-                  + Время
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label="Очистить черновик"
-                  disabled={voiceActive || busy}
-                  onClick={newDraft}
-                >
-                  <Icon name="close" size={18} />
-                </button>
-                <button
-                  className="color-swatch"
-                  style={{ background: draft.color }}
-                  aria-label="Изменить цвет группы"
-                  onClick={() =>
-                    patch({
-                      color:
-                        COLORS[
-                          (COLORS.indexOf(draft.color) + 1) % COLORS.length
-                        ],
-                    })
-                  }
-                />
-              </div>
-              {message && !["saved", "saveError"].includes(modal) && (
-                <p className="voice-notice" role="status">
-                  {message}
-                </p>
-              )}
-              {!voiceActive && (draft.text.trim() || queue.length > 0) && (
-                <button
-                  className="text-button save-text"
-                  disabled={busy}
-                  onClick={save}
-                >
-                  Сохранить без записи
-                </button>
-              )}
-              {queue.length > 0 && (
-                <div className="queued">
-                  <strong>Черновики · {queue.length}</strong>
-                  {queue.map((r) => (
-                    <div key={r.id}>
-                      <i style={{ background: r.color }} />
-                      <span>
-                        {r.text} · {r.times.join(", ")}
-                      </span>
-                      <button
-                        className="icon-button"
-                        aria-label={"Удалить черновик " + r.text}
-                        onClick={() =>
-                          setQueue((q) => q.filter((x) => x.id !== r.id))
-                        }
-                      >
-                        <Icon name="close" size={16} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
             </section>
-            <div className="calendar-pane">
-              <Calendar
-                month={month}
-                onMonth={setMonth}
-                selecting={composing}
-                dates={
-                  !composing
-                    ? []
-                    : draft.schedule && draft.schedule.kind !== "dates"
-                      ? []
-                      : draft.dates.length || draft.text.trim() || live
-                        ? dates
-                        : []
+            <button
+              className={
+                "focus-record " + (composing ? "is-recording" : "is-ready")
+              }
+              disabled={busy}
+              aria-pressed={voiceActive}
+              aria-label={busy ? "Сохраняю" : composing ? "Готово" : "Начать"}
+              onClick={composing ? save : listen}
+            >
+              <span className="record-symbol" aria-hidden="true">
+                {composing ? "✓" : "●"}
+              </span>
+              {busy ? "Сохраняю…" : composing ? "Готово" : "Начать"}
+            </button>
+            <Calendar
+              month={month}
+              onMonth={setMonth}
+              selecting={composing}
+              dates={composing ? dates : []}
+              draftId={draft.id}
+              occurrences={marks}
+              color={draft.color}
+              onDate={(date) => {
+                if (busy) return;
+                if (composing) pick(date);
+                else {
+                  setDayFilter(date);
+                  setTab("events");
+                  setMessage("");
                 }
-                onDate={(d) => {
-                  if (busy) return;
-                  if (composing) pick(d);
-                  else {
-                    setDayFilter(d);
-                    setTab("events");
-                    setMessage("");
-                  }
-                }}
-                draftId={draft.id}
-                occurrences={marks}
-                color={draft.color}
-              />
-              <div className="planner-actions">
-                <button
-                  className="secondary"
-                  disabled={busy || voice !== "idle"}
-                  onClick={add}
-                >
-                  Добавить
-                </button>
-                <button
-                  className="primary"
-                  disabled={busy}
-                  onClick={voiceActive ? save : listen}
-                >
-                  {busy ? "Сохраняю…" : voiceActive ? "Готово" : "Начать"}
-                </button>
-              </div>
-            </div>
+              }}
+            />
           </div>
         )}
         {tab === "events" && (
@@ -815,15 +577,13 @@ export default function App() {
             <header className="page-title">
               <h1>События</h1>
               <button
-                className="text-button"
-                disabled={voiceActive || busy}
+                className="text-button back-home"
                 onClick={() => {
-                  newDraft();
-                  setCreating(true);
                   setTab("home");
+                  setMessage("");
                 }}
               >
-                + Добавить
+                ← Главная
               </button>
             </header>
             <div className="agenda-month">
@@ -874,7 +634,7 @@ export default function App() {
                   {dayFilter ? "В этот день нет событий" : "Месяц без событий"}
                 </h2>
                 <p>
-                  Нажмите «Добавить», создайте напоминание и выберите этот день.
+                  Вернитесь на главную, нажмите «Начать» и выберите этот день.
                 </p>
               </div>
             )}
@@ -937,6 +697,15 @@ export default function App() {
           <section className="planner-settings">
             <header className="page-title">
               <h1>Настройки</h1>
+              <button
+                className="text-button back-home"
+                onClick={() => {
+                  setTab("home");
+                  setMessage("");
+                }}
+              >
+                ← Главная
+              </button>
             </header>
             <div className="settings-card">
               <label className="field">
@@ -946,12 +715,6 @@ export default function App() {
                   onChange={(e) => setting({ name: e.target.value })}
                 />
               </label>
-              <Toggle
-                label="Слушать при открытии"
-                description="Один раз при запуске. После перехода между вкладками — только кнопкой микрофона."
-                value={settings.autoListen}
-                onChange={(v) => setting({ autoListen: v })}
-              />
               <label className="field">
                 Как напоминать
                 <select
@@ -1142,38 +905,17 @@ export default function App() {
           </section>
         )}
       </div>
-      <nav className="tab-bar" aria-label="Основная навигация">
-        {[
-          ["home", "Главная"],
-          ["events", "События"],
-          ["settings", "Настройки"],
-        ].map(([id, label]) => (
-          <button
-            key={id}
-            aria-current={tab === id ? "page" : undefined}
-            onClick={() => {
-              setTab(id);
-              if (id === "events") setDayFilter(null);
-              setMessage("");
-            }}
-          >
-            <NavIcon name={id} />
-            <span>{label}</span>
-          </button>
-        ))}
-      </nav>
       {modal === "welcome" && (
         <Modal title="Говорите — мы напомним">
           <p>
-            Главная страница может сразу включать микрофон. Запись видна на
-            экране и прекращается при выходе из приложения. Аудио обрабатывается
-            системным речевым сервисом, который может использовать интернет.
+            Нажмите «Начать», чтобы включить микрофон. «Готово» завершает
+            диктовку и сохраняет напоминание. Аудио обрабатывается системным
+            речевым сервисом, который может использовать интернет.
           </p>
           <p className="hint">
-            Пока создаёте напоминание, нажатия выбирают даты — даже после
-            остановки записи. После «Готово» нажатие на дату открывает события
-            дня. Не более 12 срабатываний в день. Повторная запись — кнопкой
-            микрофона.
+            Во время создания выбирайте даты на календаре. Чтобы очистить текст,
+            нажмите крестик. Вне создания нажатие на дату открывает события дня.
+            Не более 12 срабатываний в день. Микрофон сам не включается.
           </p>
           <label className="field">
             Как к вам обращаться
@@ -1198,129 +940,51 @@ export default function App() {
           </button>
         </Modal>
       )}
-      {modal === "saved" && (
-        <Modal
-          title="Напоминания сохранены"
-          onClose={() => {
-            setModal(null);
-            setMessage("");
-          }}
-        >
-          <p>
-            {message}. Сигналы поставлены в расписание. Цвет сохранённой группы
-            не меняется при создании новой.
-          </p>
+      {draft.dateConflict && !modal && (
+        <div className="floating-bubble conflict-bubble" role="alert">
+          <p>В тексте и календаре разные даты. Какие использовать?</p>
           <button
-            className="primary full"
+            className="secondary"
             onClick={() => {
-              setModal(null);
-              setMessage("");
-              setDayFilter(null);
-              setTab("events");
-            }}
-          >
-            Открыть события
-          </button>
-          <button
-            className="secondary full"
-            onClick={() => {
-              setModal(null);
-              setMessage("");
+              const dates =
+                draft.dateConflict.calendarDates ||
+                draft.dateConflict.selectedDates;
+              const next = {
+                ...draft,
+                dates,
+                selectedDates: dates,
+                dateConflict: null,
+                schedule: {
+                  ...defaultSchedule(),
+                  kind: "dates",
+                  dates,
+                  times: draft.times,
+                },
+              };
+              draftRef.current = next;
+              setDraft(next);
               setCreating(true);
+              setMessage("");
             }}
           >
-            Новое напоминание
+            Даты календаря
           </button>
-        </Modal>
-      )}
-      {modal === "saveError" && (
-        <Modal title="Напоминание не сохранено" onClose={() => setModal(null)}>
-          <p role="alert">{message}</p>
-          <p className="hint">
-            Текст и выбранные даты остались в черновике. Пока сохранение не
-            подтверждено, сигнал не поставлен.
-          </p>
-          {isNative() && /Разрешите/.test(message) && (
-            <button
-              className="secondary full"
-              onClick={async () => {
-                try {
-                  setPerms(await requestPermissions());
-                } catch (e) {
-                  setMessage(e.message);
-                }
-              }}
-            >
-              Проверить разрешения
-            </button>
-          )}
-          <button className="primary full" onClick={() => setModal(null)}>
-            Вернуться к черновику
-          </button>
-        </Modal>
-      )}
-      {modal === "transcript" && (
-        <Modal title="Расшифровка" onClose={() => setModal(null)}>
-          <p>{live || draft.originalTranscript}</p>
-        </Modal>
-      )}
-      {modal === "time" && (
-        <Modal title="Добавить время" onClose={() => setModal(null)}>
-          <label className="field">
-            Время напоминания
-            <input
-              type="time"
-              value={time}
-              onChange={(e) => setTime(e.target.value)}
-            />
-          </label>
           <button
-            className="primary full"
+            className="primary"
             onClick={() => {
-              if (!time) return;
-              const times = [...new Set([...draft.times, time])].sort();
-              patch({
-                times,
-                schedule:
-                  draft.schedule?.kind === "calendar"
-                    ? { ...draft.schedule, times }
-                    : draft.schedule,
+              const next = parseEditor(editorPhrase(draft), {
+                ...draft,
+                selectedDates: [],
               });
-              setModal(null);
+              draftRef.current = next;
+              setDraft(next);
+              setCreating(true);
+              setMessage("");
             }}
           >
-            Добавить время
+            Даты из текста
           </button>
-        </Modal>
-      )}
-      {modal === "repeat" && (
-        <EditReminder
-          initial={{
-            ...draft,
-            schedule:
-              draft.schedule && draft.schedule.kind !== "dates"
-                ? draft.schedule
-                : {
-                    ...defaultSchedule(),
-                    kind: "calendar",
-                    times: draft.times.length ? draft.times : ["09:00"],
-                    anchorDate: dates[0],
-                  },
-          }}
-          settings={settings}
-          busy={false}
-          onClose={() => setModal(null)}
-          onSave={async (r) => {
-            setDraft({
-              ...r,
-              dates: [],
-              times: r.schedule.times || [],
-              issues: [],
-              dateConflict: null,
-            });
-            setModal(null);
-          }}
-        />
+        </div>
       )}
       {modal === "event" && editing?.rule && (
         <Modal

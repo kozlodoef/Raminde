@@ -25,7 +25,7 @@ export const defaults = {
   privateNotification: false,
   rate: 0.95,
   pickerSound: false,
-  autoListen: true,
+  autoListen: false,
 };
 const KEY = "raminde.v2";
 export function emptyState() {
