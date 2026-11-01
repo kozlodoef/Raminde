@@ -59,13 +59,6 @@ jobs:
       - name: Синхронизировать веб-сборку с Android
         run: npx cap sync android
 
-      - name: Скачать русскую модель потокового распознавания
-        run: |
-          mkdir -p android/app/src/main/assets
-          curl -L --fail --retry 3 https://alphacephei.com/vosk/models/vosk-model-small-ru-0.22.zip -o /tmp/vosk-ru.zip
-          unzip -q /tmp/vosk-ru.zip -d /tmp/vosk-model
-          rm -rf android/app/src/main/assets/model
-          mv /tmp/vosk-model/vosk-model-small-ru-0.22 android/app/src/main/assets/model
 
       - name: Собрать APK
         run: |
