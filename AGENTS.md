@@ -7,13 +7,17 @@
 3. Не жди явной команды пользователя «продолжай» — считай, что разрешение на продолжение выдано заранее.
 4. Каждый прерванный этап фиксируй здесь же, в разделе «Текущий статус», чтобы следующая итерация возобновления знала, что делать.
 
-## Текущий статус проекта (flutter-reminder)
+## Текущий статус проекта (flutter-reminder) — ОБНОВЛЁН 2026-11-02
 - Этапы 1–6 выполнены (каркас, SQLite, уведомления, голос, UI, PRO/RuStore).
-- ✅ Тесты парсера: **107/107 passed** (проверено `dart run test/run_dart_tests.dart`).
-- ✅ test/time_parser_test.dart и test/domain_test.dart корректны, синхронизированы; временный dbg_tmp.dart удалён.
-- ⚠️ `dart analyze lib/data/store.dart` даёт 8 ошибок типа «Target of URI doesn't exist» (sqflite/path) — это ложные ошибки среды: пакеты объявлены в pubspec.yaml, но `dart pub get` невозможен без Flutter SDK. Реальная проверка — `flutter analyze` на машине пользователя. Код store.dart синтаксически корректен.
-- ✅ Атомарный коммит выполнен (3c7b2d3).
-- Следующий шаг: у пользователя — `flutter create . --platforms=android && flutter pub get && flutter test && flutter analyze`, распаковка модели Vosk, сборка APK для RuStore.
+- ✅ Тесты парсера: **107/107 passed** (`dart run test/run_dart_tests.dart`).
+- ✅ `dart analyze lib/domain/time_parser.dart` — No issues found (коммит d6276a8).
+- ✅ Рабочее дерево чистое, коммиты выполнены.
+- ⚠️ Ошибки `dart analyze` для store.dart/services/screens — только из-за отсутствия Flutter SDK в среде (sqflite/flutter_test не резолвятся); на машине пользователя проверить через `flutter analyze`.
+
+## Следующие невыполненные шаги (продолжать по этому списку при возобновлении)
+1. Реализовать слой приложений: lib/providers/reminders_provider.dart (ChangeNotifier поверх Store + NotificationsService), связать экраны с реальными данными (сейчас UI частично на стабах).
+2. Проверить dart analyze для lib/services/pro_access.dart и lib/domain/access.dart/scheduler.dart (без внешних пакетов).
+3. На машине пользователя: flutter create . --platforms=android && flutter pub get && flutter test && flutter analyze; модель Vosk; сборка APK; RuStore.
 
 ## Рабочие команды
 - Прогон тестов без Flutter SDK: `cd /workspace/flutter-reminder && dart run test/run_dart_tests.dart`
