@@ -100,7 +100,7 @@ double? wordToNum(String ww) {
   return val == 0 ? null : val.toDouble();
 }
 
-String joinKeys(Map o) => o.keys.join('|');
+String joinKeys(Map o) => sortedKeysByLength(o).join('|');
 
 /// Отсортированные по убыванию длины ключи — для шаблонов, которые матчатся
 /// БЕЗ флага unicode. В Dart (в отличие от JS-эталона с флагом `u`) `\p{Ll}`
@@ -123,8 +123,16 @@ String grp(String src) => '(?:$src)';
 /// собираться с флагом unicode — без него в Dart границы слов для кириллицы
 /// ломаются и слова обрезаются по неверной позиции (как в JS-комментарии:
 /// «через два часа» → «через два час»).
-RegExp mkRe(String pattern, [String flags = '']) =>
-    RegExp(pattern);
+/// В Dart нет флага `g`: все replaceAll в этом файле вызываются только с
+/// шаблонами из mkRe, поэтому allMatches здесь эквивалентен JS-`gi`.
+Iterable<Match> mkAll(RegExp re, String input) => re.allMatches(input);
+
+RegExp mkRe(String pattern, [String flags = '']) => RegExp(
+      pattern,
+      unicode: true, // обязателен для \p{Ll} границ слов в кириллице
+      caseSensitive: !flags.contains('i'),
+      multiLine: flags.contains('m'),
+    );
 
 
 // Граница слова, совместимая с кириллицей: перед/после слова — не буква.
@@ -557,12 +565,12 @@ String cleanup(String text) {
   var t = text
       // Сначала убираем глагол («напомни», «напомнить»), чтобы слово даты
       // оказалось в начале строки и следующий шаг его увидел.
-      .replaceAll(
+      .replaceAllMapped(
           mkRe('напомин' + ru + '|напомн' + ru +
-              '|напоминание|не забудь|помяни'),
-          ' ')
+              '|напоминание|не забудь|помяни', 'gi'),
+          (_) => ' ')
       .replaceAll(
-          mkRe('^\\s*(чтобы|про|насчёт|на счёт|о том что|что)\\s+'),
+          mkRe('^\\s*(чтобы|про|насчёт|на счёт|о том что|что)\\s+', 'i'),
           '')
       .trim();
   // Дата и день недели уже показаны отдельно («Завтра 07:00 | …»),
@@ -570,18 +578,18 @@ String cleanup(String text) {
   t = t.replaceAll(
       mkRe(
           '^\\s*в?\\s*(?:послезавтра|завтра|сегодня|вчера|(?:' +
-              weekdayAlt + '))\\s+'),
+              weekdayAlt + '))\\s+',
+          'i'),
       '');
-  t = t.replaceAll(
-      mkRe(w('мне') + '|' + w('нам') + '|' + w('меня')),
-      ' ');
-  t = t.replaceAll(
-      mkRe(w('пожалуйста')), ' ');
-  t = t.replaceAll(
+  t = t.replaceAllMapped(
+      mkRe(w('мне') + '|' + w('нам') + '|' + w('меня'), 'gi'), (_) => ' ');
+  t = t.replaceAllMapped(mkRe(w('пожалуйста'), 'gi'), (_) => ' ');
+  t = t.replaceAllMapped(
       mkRe(
           w('где-то') + '|' + w('примерно') + '|' + w('приблизительно') +
-              '|' + w('около')),
-      ' ');
+              '|' + w('около'),
+          'gi'),
+      (_) => ' ');
   // Осиротевший предлог: выражение времени вырезано («… в половине десятого …»),
   // а «в» осталось висеть отдельным словом.
   t = t.replaceAll(RegExp('^\\s*в(\\s+|\$)', unicode: true), '');
