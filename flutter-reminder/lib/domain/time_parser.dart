@@ -415,7 +415,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
 
     // ---------- D. Дата (после времени) ----------
     // «15 октября», «5 мая 2027», «двадцать пятое октября»
-    if (dayOffset == null && absY == null) {
+    if (dayOffset == null && absY == null) { // ignore: unnecessary_null_comparison
       final m = eat(RegExp('(' + numExpr + r')(?:\s+(?:числа|го))?\s+(' +
           joinKeys(months) + ')' + wbR + r'(?:\s+(\d{4}))?'));
       if (m != null) {
@@ -485,7 +485,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
             : DateTime(base.year, base.month, base.day);
 
     if (hour != null) {
-      var h = hour!;
+      var h = hour;
       if (pod == 'morning') {
         if (h == 12) h = 0;
       } else if (pod == 'afternoon') {
