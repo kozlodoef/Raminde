@@ -9,8 +9,11 @@
 
 ## Текущий статус проекта (flutter-reminder)
 - Этапы 1–6 выполнены (каркас, SQLite, уведомления, голос, UI, PRO/RuStore).
-- Тесты парсера: 107 кейсов; последние прогоны давали 107/107 после фикса mkRe/joinKeys/cleanup, но фиксы могли не сохраниться — ПРОВЕРИТЬ `dart run test/run_dart_tests.dart`.
-- Осталось: верификация зелёного прогона тестов, синхронизация test/time_parser_test.dart и test/domain_test.dart, `dart analyze lib/data/store.dart`, атомарный коммит.
+- ✅ Тесты парсера: **107/107 passed** (проверено `dart run test/run_dart_tests.dart`).
+- ✅ test/time_parser_test.dart и test/domain_test.dart корректны, синхронизированы; временный dbg_tmp.dart удалён.
+- ⚠️ `dart analyze lib/data/store.dart` даёт 8 ошибок типа «Target of URI doesn't exist» (sqflite/path) — это ложные ошибки среды: пакеты объявлены в pubspec.yaml, но `dart pub get` невозможен без Flutter SDK. Реальная проверка — `flutter analyze` на машине пользователя. Код store.dart синтаксически корректен.
+- ✅ Атомарный коммит выполнен (3c7b2d3).
+- Следующий шаг: у пользователя — `flutter create . --platforms=android && flutter pub get && flutter test && flutter analyze`, распаковка модели Vosk, сборка APK для RuStore.
 
 ## Рабочие команды
 - Прогон тестов без Flutter SDK: `cd /workspace/flutter-reminder && dart run test/run_dart_tests.dart`
