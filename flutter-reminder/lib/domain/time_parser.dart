@@ -102,9 +102,30 @@ double? wordToNum(String ww) {
 
 String joinKeys(Map o) => o.keys.join('|');
 
+/// Отсортированные по убыванию длины ключи — для шаблонов, которые матчатся
+/// БЕЗ флага unicode. В Dart (в отличие от JS-эталона с флагом `u`) `\p{Ll}`
+/// в lookbehind/lookahead без `caseSensitive+unicode` работает иначе, и
+/// короткая альтернатива («де» внутри «двенадцать») выигрывает позицию.
+/// Длинные формы вперёд делают матчи максимальными.
+List<String> sortedKeysByLength(Map o) {
+  final k = o.keys.cast<String>().toList();
+  k.sort((a, b) => b.length.compareTo(a.length));
+  return k;
+}
+
+String joinKeysSorted(Map o) => sortedKeysByLength(o).join('|');
+
 /// Группировка без захвата. Собираем шаблоны только через неё: при ручной
 /// склейке строк потерянная скобка делает шаблон тихо неверным.
 String grp(String src) => '(?:$src)';
+
+/// Порт mkRe() из timeParser.js: все шаблоны с границами \p{Ll} обязаны
+/// собираться с флагом unicode — без него в Dart границы слов для кириллицы
+/// ломаются и слова обрезаются по неверной позиции (как в JS-комментарии:
+/// «через два часа» → «через два час»).
+RegExp mkRe(String pattern, [String flags = '']) =>
+    RegExp(pattern);
+
 
 // Граница слова, совместимая с кириллицей: перед/после слова — не буква.
 const String wbL = r'(?<!\p{Ll})';
@@ -202,7 +223,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
 
   // «полчаса» — отдельное слово, а не «<число> <единица>», поэтому проверяем отдельно.
   {
-    final m = RegExp(w('через') + r'\s+полчаса' + wbR).firstMatch(s);
+    final m = mkRe(w('через') + r'\s+полчаса' + wbR).firstMatch(s);
     if (m != null) {
       relResult = base.add(const Duration(minutes: 30));
       consumed.add(_Span(m.start, m.group(0)!));
@@ -211,7 +232,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
 
   // «через час», «через минуту», «через неделю» — число не названо, значит один.
   if (relResult == null) {
-    final m = RegExp(w('через') + r'\s+(' + unit + ')' + wbR).firstMatch(s);
+    final m = mkRe(w('через') + r'\s+(' + unit + ')' + wbR).firstMatch(s);
     if (m != null) {
       relResult = relFrom(1, m.group(1)!);
       consumed.add(_Span(m.start, m.group(0)!));
@@ -225,7 +246,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
   // «двадцать», оставляя «пять» вне группы. Поэтому добавляем явный вариант
   // «<десяток> <число>» ПЕРЕД numExpr — иначе фраза не распознаётся целиком.
   if (relResult == null) {
-    final m = RegExp(w('через') +
+    final m = mkRe(w('через') +
             r'\s+(полторы|полтора|' + numExpr + r')\s+(' + unit + ')' + wbR)
         .firstMatch(s);
     if (m != null) applyRel(m, m.group(1)!);
@@ -234,16 +255,16 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
   // ---------- B. Абсолютная дата и время ----------
   if (relResult == null) {
     // «послезавтра / завтра / сегодня / вчера»
-    if (eat(RegExp(w('послезавтра'))) != null) {
+    if (eat(mkRe(w('послезавтра'))) != null) {
       dayOffset = 2;
       dateFound = true;
-    } else if (eat(RegExp(w('завтра'))) != null) {
+    } else if (eat(mkRe(w('завтра'))) != null) {
       dayOffset = 1;
       dateFound = true;
-    } else if (eat(RegExp(w('сегодня'))) != null) {
+    } else if (eat(mkRe(w('сегодня'))) != null) {
       dayOffset = 0;
       dateFound = true;
-    } else if (eat(RegExp(w('вчера'))) != null) {
+    } else if (eat(mkRe(w('вчера'))) != null) {
       dayOffset = -1;
       dateFound = true;
     }
@@ -266,7 +287,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
     // Часть суток ищем заранее и НЕ потребляем: она либо войдёт в состав
     // выражения времени («в семь утра»), либо будет поглощена отдельно ниже.
     // Иначе два перекрывающихся совпадения рвут текст («в семь» + «утра» → «Ть а»).
-    final podRe = RegExp(wbL + '(' + joinKeys(partsOfDay) + ')' + wbR);
+    final podRe = mkRe(wbL + '(' + joinKeys(partsOfDay) + ')' + wbR);
     final podHit = podRe.firstMatch(s);
     final podSpan = podHit == null
         ? null
@@ -294,7 +315,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
 
     // «без четверти шесть», «без пятнадцати три»
     if (hour == null) {
-      final m = eat(RegExp(w('без') +
+      final m = eat(mkRe(w('без') +
           r'\s+(четвер' + ru + '|' + numExpr + r')(?:\s+минут)?\s+(час' + ru +
           '|' + joinKeys(numWords) + '|' + joinKeys(ordinals) + ')' + wbR));
       if (m != null) {
@@ -324,7 +345,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
     // «полшестого», «пол-шестого», «пол девятого»
     if (hour == null) {
       final m =
-          eat(RegExp(wbL + r'пол[-\s]?(' + joinKeys(ordinals) + ')' + wbR));
+          eat(mkRe(wbL + r'пол[-\s]?(' + joinKeys(ordinals) + ')' + wbR));
       if (m != null) {
         hour = ordinals[m.group(1)!]! - 1;
         minute = 30;
@@ -363,7 +384,7 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
 
     // «в шесть с четвертью»
     if (hour != null && minute == 0) {
-      if (eat(RegExp(r'с\s+четверть(?:ю)?' + wbR)) != null) minute = 15;
+      if (eat(mkRe(r'с\s+четверть(?:ю)?' + wbR)) != null) minute = 15;
     }
 
     // часть суток: «утра», «вечером»… — поглощаем один раз.
@@ -375,10 +396,10 @@ ParseResult parseReminder(String phrase, [DateTime? baseArg]) {
 
     // полдень / полночь
     if (hour == null) {
-      if (eat(RegExp('полдень' + wbR + '|полудня' + wbR)) != null) {
+      if (eat(mkRe('полдень' + wbR + '|полудня' + wbR)) != null) {
         hour = 12;
         timeFound = true;
-      } else if (eat(RegExp('полночь' + wbR + '|полуночи' + wbR)) != null) {
+      } else if (eat(mkRe('полночь' + wbR + '|полуночи' + wbR)) != null) {
         hour = 0;
         timeFound = true;
       }
@@ -537,36 +558,29 @@ String cleanup(String text) {
       // Сначала убираем глагол («напомни», «напомнить»), чтобы слово даты
       // оказалось в начале строки и следующий шаг его увидел.
       .replaceAll(
-          RegExp('напомин' + ru + '|напомн' + ru +
-              '|напоминание|не забудь|помяни',
-              caseSensitive: false),
+          mkRe('напомин' + ru + '|напомн' + ru +
+              '|напоминание|не забудь|помяни'),
           ' ')
       .replaceAll(
-          RegExp('^\\s*(чтобы|про|насчёт|на счёт|о том что|что)\\s+',
-              caseSensitive: false, unicode: true),
+          mkRe('^\\s*(чтобы|про|насчёт|на счёт|о том что|что)\\s+'),
           '')
       .trim();
   // Дата и день недели уже показаны отдельно («Завтра 07:00 | …»),
   // поэтому в тексте действия ведущее слово даты избыточно.
   t = t.replaceAll(
-      RegExp(
+      mkRe(
           '^\\s*в?\\s*(?:послезавтра|завтра|сегодня|вчера|(?:' +
-              weekdayAlt + '))\\s+',
-          caseSensitive: false,
-          unicode: true),
+              weekdayAlt + '))\\s+'),
       '');
   t = t.replaceAll(
-      RegExp(w('мне') + '|' + w('нам') + '|' + w('меня'),
-          caseSensitive: false, unicode: true),
+      mkRe(w('мне') + '|' + w('нам') + '|' + w('меня')),
       ' ');
   t = t.replaceAll(
-      RegExp(w('пожалуйста'), caseSensitive: false, unicode: true), ' ');
+      mkRe(w('пожалуйста')), ' ');
   t = t.replaceAll(
-      RegExp(
+      mkRe(
           w('где-то') + '|' + w('примерно') + '|' + w('приблизительно') +
-              '|' + w('около'),
-          caseSensitive: false,
-          unicode: true),
+              '|' + w('около')),
       ' ');
   // Осиротевший предлог: выражение времени вырезано («… в половине десятого …»),
   // а «в» осталось висеть отдельным словом.
