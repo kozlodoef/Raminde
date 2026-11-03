@@ -14,33 +14,13 @@ import 'package:ru_vremya_remindme/domain/reminder.dart';
 import 'package:ru_vremya_remindme/domain/scheduler.dart';
 import 'package:ru_vremya_remindme/domain/time_parser.dart';
 
-int _passed = 0;
-int _failed = 0;
-final List<String> _failures = [];
-
-void check(String name, Object body) {
-  // body — либо bool, либо bool Function() (для отложенных проверок).
-  final bool Function() f = body is bool ? () => body : body as bool Function();
-  try {
-    if (f()) {
-      _passed++;
-    } else {
-      _failed++;
-      _failures.add('FAIL: $name — вернул false');
-    }
-  } catch (e) {
-    _failed++;
-    _failures.add('FAIL: $name — исключение: $e');
-  }
-}
-
-// --- утилиты форматирования (как в time_parser_test.dart) ---
+// === ОБЩИЙ БЛОК КЕЙСОВ (единый источник — test/time_parser_test.dart) ===
 final now = DateTime(2026, 10, 7, 12, 0, 0);
 
 String p2(num n) => n.toInt().toString().padLeft(2, '0');
 String fmt(DateTime? d) => d == null
     ? 'null'
-    : '${d!.year}-${p2(d.month)}-${p2(d.day)} ${p2(d.hour)}:${p2(d.minute)}';
+    : '${d.year}-${p2(d.month)}-${p2(d.day)} ${p2(d.hour)}:${p2(d.minute)}';
 
 DateTime addDays(DateTime d, int n) =>
     DateTime(d.year, d.month, d.day + n, d.hour, d.minute, d.second);
@@ -128,6 +108,31 @@ final cases = <Case>[
   // --- без времени и даты ---
   Case('Напомни позвонить маме', null, 'Позвонить маме'),
 ];
+// === КОНЕЦ ОБЩЕГО БЛОКА ===
+
+int _passed = 0;
+int _failed = 0;
+final List<String> _failures = [];
+
+void check(String name, Object body) {
+  // body — либо bool, либо bool Function() (для отложенных проверок).
+  final bool Function() f = body is bool ? () => body : body as bool Function();
+  try {
+    if (f()) {
+      _passed++;
+    } else {
+      _failed++;
+      _failures.add('FAIL: $name — вернул false');
+    }
+  } catch (e) {
+    _failed++;
+    _failures.add('FAIL: $name — исключение: $e');
+  }
+}
+
+// --- утилиты форматирования (как в time_parser_test.dart) ---
+// (утилиты и кейсы — в общем блоке выше)
+
 
 String norm(String x) => x.toLowerCase().replaceAll('ё', 'е');
 
