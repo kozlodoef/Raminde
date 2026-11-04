@@ -1,0 +1,38 @@
+name: ru_vremya_remindme
+description: "Напоминание голосом — бесплатное приложение с точными будильниками и апгрейдом до PRO."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+
+  # Хранение напоминаний/настроек/статуса PRO (аналог storage.js + SQLite из плана)
+  sqflite: ^2.4.1
+  path: ^1.9.0
+  shared_preferences: ^2.3.3
+
+  # Точные локальные уведомления вместо WebView-таймеров (этап 4 плана)
+  flutter_local_notifications: ^18.0.0
+  timezone: ^0.10.0
+
+  # Голосовой ввод: on-device распознавание, работает на устройствах без GMS (этап 5)
+  vosk_flutter: ^0.3.62
+
+  http: ^1.2.0
+  intl: ^0.19.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/models/

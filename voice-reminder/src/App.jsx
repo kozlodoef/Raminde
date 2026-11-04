@@ -38,7 +38,7 @@ import {
   buildGroup,
   occurrencesInMonth,
 } from "./domain/groups.js";
-import { accessActive } from "./domain/access.js";
+import { accessActive, proActive, FREE_REMINDER_LIMIT, FREE_REPEAT_LIMIT } from "./domain/access.js";
 import {
   billingConfigured,
   billingStatus,
@@ -363,8 +363,9 @@ export default function App() {
   }
   async function persist(r) {
     let token;
+    const pro = bill ? !!bill.premium : proActive(state.access);
     try {
-      if (billingConfigured) token = (await reserveQuota(r.id)).token;
+      if (billingConfigured && pro) token = (await reserveQuota(r.id)).token;
       const s = await putReminder(r, { reservation: token });
       const stored = s?.reminders?.find((item) => item.id === r.id);
       if (
@@ -414,6 +415,22 @@ export default function App() {
       const rule = buildGroup(current, Date.now(), {
         allowPast: state?.reminders.some((r) => r.id === current.id),
       });
+      if (!isPro) {
+        const isNew = !state.reminders.some((r) => r.id === rule.id);
+        // Лимит считается по активным напоминаниям: удалённые/отключённые
+        // слоты переиспользуются.
+        const activeCount = state.reminders.filter(
+          (r) => r.enabled !== false,
+        ).length;
+        if (isNew && activeCount >= FREE_REMINDER_LIMIT) throw Error("FREE_LIMIT");
+        const times =
+          rule.schedule?.times?.length ||
+          (rule.schedule?.kind === "once" ? 1 : 0);
+        const isRepeating =
+          ["repeat", "calendar", "interval"].includes(rule.schedule?.kind) ||
+          times > FREE_REPEAT_LIMIT;
+        if (isRepeating) throw Error("FREE_PRO_ONLY");
+      }
       assertDailyCapacity(state.reminders, [rule], { events: state.events });
       await persist(rule);
       const fresh = blank(
@@ -431,9 +448,18 @@ export default function App() {
       setMessage(
         e.message === "SUBSCRIPTION"
           ? "Пробный месяц закончился. Нужна подписка."
-          : e.message,
+          : e.message === "FREE_LIMIT"
+            ? `В бесплатной версии до ${FREE_REMINDER_LIMIT} напоминаний. Удалите одно или оформите PRO.`
+            : e.message === "FREE_PRO_ONLY"
+              ? "Повторяющиеся напоминания доступны в версии PRO."
+              : e.message,
       );
-      if (e.message === "SUBSCRIPTION") setModal("access");
+      if (
+        e.message === "SUBSCRIPTION" ||
+        e.message === "FREE_LIMIT" ||
+        e.message === "FREE_PRO_ONLY"
+      )
+        setModal("access");
     } finally {
       saving.current = false;
       setBusy(false);
@@ -481,6 +507,7 @@ export default function App() {
   const dates = draft.dates;
   const trial = bill?.trialEndsAt || state.access?.trialEndsAt,
     active = bill ? bill.active : accessActive(state.access);
+  const isPro = bill ? !!bill.premium : proActive(state.access);
   const daysLeft = Math.max(0, Math.ceil((trial - Date.now()) / 86400000));
   const shownEntries = dayFilter
     ? entries.filter((e) => e.date === dayFilter)
@@ -806,15 +833,15 @@ export default function App() {
               <h2>Доступ</h2>
               <p>
                 {bill?.premium
-                  ? "Подписка активна"
-                  : active
-                    ? `Первый месяц бесплатно · осталось ${daysLeft} дн.`
-                    : "Пробный месяц завершён"}
+                  ? "PRO активна"
+                  : active && trial > Date.now()
+                    ? `Пробный период PRO · осталось ${daysLeft} дн.`
+                    : `Бесплатная версия · ${Math.min(state.reminders.length, FREE_REMINDER_LIMIT)}/${FREE_REMINDER_LIMIT} напоминаний`}
               </p>
               <p className="hint">
-                Без ограничения числа напоминаний. После пробного месяца
-                создание и изменение — по подписке. Сохранённые напоминания
-                продолжают работать.
+                Бесплатно — до {FREE_REMINDER_LIMIT} напоминаний без повторов.
+                PRO снимает лимиты и открывает повторяющиеся напоминания.
+                Сохранённые напоминания продолжают работать всегда.
               </p>
               <button
                 className="secondary full"

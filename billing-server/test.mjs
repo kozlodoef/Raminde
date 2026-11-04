@@ -11,13 +11,15 @@ function fixture() {
     },
   };
 }
-test("first month has unlimited reminders; expiry requires subscription", async () => {
+test("freemium: trial reserves quota, after expiry free users get null token", async () => {
  const a=fixture();try{const {token}=await a.route('/api/session','POST',{});
- for(let i=0;i<35;i++){const v=await a.route('/api/quota/reserve','POST',{id:'r'+i},token);await a.route('/api/quota/commit','POST',{token:v.token},token);}
+ for(let i=0;i<35;i++){const v=await a.route('/api/quota/reserve','POST',{id:'r'+i},token);assert.ok(v.token,'trial must reserve');await a.route('/api/quota/commit','POST',{token:v.token},token);}
  const status=await a.route('/api/status','GET',{},token);assert.equal(status.trial,true);assert.equal(status.used,35);assert.equal(new Date(status.trialEndsAt).toISOString(),'2026-11-07T12:00:00.000Z');
- a.setTime('2026-11-07T12:00:00Z');await assert.rejects(a.route('/api/quota/reserve','POST',{id:'new'},token),/SUBSCRIPTION/);
- await assert.rejects(a.route('/api/quota/reserve','POST',{id:'r0'},token),/SUBSCRIPTION/);
- assert.equal((await a.route('/api/status','GET',{},token)).active,false);
+ a.setTime('2026-11-07T12:00:00Z');
+ const free=await a.route('/api/quota/reserve','POST',{id:'new'},token);
+ assert.equal(free.token,null);assert.equal(free.free,true);
+ await assert.rejects(a.route('/api/quota/commit','POST',{token:null},token),/Резерв не найден/);
+ assert.equal((await a.route('/api/status','GET',{},token)).premium,false);
  }finally{a.close();}
 });
 test("commit idempotency", async () => {

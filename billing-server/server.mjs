@@ -217,7 +217,9 @@ export function createBilling({
       if (typeof body.id !== "string" || body.id.length > 100 || !body.id)
         throw fail(400, "Неверный идентификатор");
       return transaction(() => {
-        if(u.expires <= now() && u.trialEndsAt <= now()) throw fail(402,"SUBSCRIPTION");
+        // Freemium: квота резервируется только для PRO-пользователей.
+        // Бесплатные лимиты проверяются на устройстве и здесь не нужны.
+        if (u.expires <= now()) return { token: null, free: true };
         const previous = db
           .prepare("SELECT * FROM reservations WHERE uid=? AND rid=?")
           .get(u.id, body.id);
