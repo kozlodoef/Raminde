@@ -22,25 +22,20 @@ export function demoPhrase() {
   return DEMO_PHRASES[Math.floor(Math.random() * DEMO_PHRASES.length)];
 }
 
-// ---------------------------------------------------------------- браузер ---
-
 function getRecognitionCtor() {
   if (typeof window === "undefined") return null;
   return window.SpeechRecognition || window.webkitSpeechRecognition || null;
 }
 
-/** Доступен ли голосовой ввод в текущей среде. */
 export function isVoiceSupported() {
   if (isNative()) return true; // нативный плагин почти всегда доступен
   return !!getRecognitionCtor();
 }
 
-/** Уже выданное разрешение на микрофон (только для нативной среды). */
 export async function hasMicPermission() {
   if (!isNative()) return true;
   try {
-    const { SpeechRecognition } =
-      await import("@capacitor-community/speech-recognition");
+    const { SpeechRecognition } = await import("@capacitor-community/speech-recognition");
     const st = await SpeechRecognition.checkPermissions();
     return st?.speechRecognition === "granted";
   } catch (e) {
@@ -49,12 +44,10 @@ export async function hasMicPermission() {
   }
 }
 
-/** Запросить разрешение на микрофон (нативная среда). */
 export async function requestMicPermission() {
   if (!isNative()) return true;
   try {
-    const { SpeechRecognition } =
-      await import("@capacitor-community/speech-recognition");
+    const { SpeechRecognition } = await import("@capacitor-community/speech-recognition");
     const avail = await SpeechRecognition.available();
     if (!avail?.available) return false;
     const st = await SpeechRecognition.requestPermissions();
@@ -65,33 +58,38 @@ export async function requestMicPermission() {
   }
 }
 
-// ------------------------------------------------------------- нативный ---
+// ---------------------------------------------------------------- нативный ---
 
-async function startNative({ onInterim, onEnd, onError, onStart }) {
+async function startNative({ lang, onInterim, onEnd, onError, onStart }) {
   const { registerPlugin } = await import("@capacitor/core");
   const engine = registerPlugin("ReminderEngine");
-  const partial = await engine.addListener("recognitionPartial", (e) =>
-    onInterim?.(e.text),
-  );
+  const partial = await engine.addListener("recognitionPartial", (e) => onInterim?.(e.text));
   const state = await engine.addListener("recognitionState", (e) => {
-    if (e.status === "started") onStart?.();
+    // Статусы "started"/"stopped" приходят и при внутреннем перезапуске
+    // распознавания. Кнопкой управляет JS, поэтому здесь ничего не делаем.
   });
-  let timer;
+
+  let ended = false;
   const cleanup = async () => {
-    clearTimeout(timer);
-    await partial.remove();
-    await state.remove();
-    onEnd?.();
+    await partial.remove().catch(() => {});
+    await state.remove().catch(() => {});
+    if (!ended) {
+      ended = true;
+      onEnd?.();
+    }
   };
+
   const promise = engine
-    .recognize()
+    .recognize({ language: lang || "ru-RU" })
     .then((r) => r.text || "")
     .catch((e) => {
       onError?.(e.message);
       throw e;
     })
     .finally(cleanup);
-  timer = setTimeout(() => engine.abortRecognition().catch(() => {}), 30000);
+
+  // Запись завершается только действием пользователя («Готово»),
+  // поэтому автоматический таймаут здесь не нужен.
   return {
     promise,
     stop: () => engine.stopRecognition(),
@@ -99,7 +97,7 @@ async function startNative({ onInterim, onEnd, onError, onStart }) {
   };
 }
 
-// ------------------------------------------------------------- браузерная ---
+// ---------------------------------------------------------------- браузерная ---
 
 function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
   const Ctor = getRecognitionCtor();
@@ -110,9 +108,10 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
       abort: () => {},
     };
   }
+
   const rec = new Ctor();
   rec.lang = lang || "ru-RU";
-  rec.continuous = false;
+  rec.continuous = true;
   rec.interimResults = true;
   rec.maxAlternatives = 1;
 
@@ -131,6 +130,8 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
       if (onInterim) onInterim((finalText + " " + interim).trim());
     };
     rec.onerror = (e) => {
+      // Пауза или тишина — не повод прекращать запись.
+      if (e.error === "no-speech" || e.error === "aborted") return;
       if (!settled) {
         settled = true;
         onError && onError(e.error);
@@ -138,11 +139,9 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
       }
     };
     rec.onend = () => {
-      if (onEnd) onEnd();
-      if (!settled) {
-        settled = true;
-        resolve(finalText.trim());
-      }
+      settled = true;
+      onEnd && onEnd();
+      resolve(finalText.trim());
     };
     try {
       rec.start();
@@ -152,14 +151,17 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
     }
   });
 
+  const finish = () => {
+    try {
+      rec.stop();
+    } catch (_) {}
+  };
+
   return {
     promise,
-    stop: () => {
-      try {
-        rec.stop();
-      } catch (_) {}
-    },
+    stop: finish,
     abort: () => {
+      settled = true;
       try {
         rec.abort();
       } catch (_) {}
@@ -167,12 +169,6 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
   };
 }
 
-// ----------------------------------------------------------------------------
-
-/**
- * Запускает одноразовое распознавание. Возвращает Promise<string>.
- * onInterim(text) — промежуточные результаты для живой расшифровки на экране.
- */
 export async function startRecognition(opts = {}) {
   return isNative() ? startNative(opts) : startWeb(opts);
 }

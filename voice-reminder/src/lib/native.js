@@ -15,10 +15,21 @@ export function isNative() {
   if (typeof window === "undefined") return false;
   const cap = window.Capacitor;
   if (!cap) return false;
+
   // В вебе Capacitor тоже может присутствовать, поэтому проверяем платформу.
+  // Важно: cap.getPlatform() — это функция, её нужно вызвать.
   const platform = cap.getPlatform ? cap.getPlatform() : cap.platform;
+
   if (platform) return platform !== "web";
-  return typeof cap.isNativePlatform === "function" && cap.isNativePlatform();
+
+  // Fallback: если нет getPlatform, проверяем isNativePlatform (также функция)
+  const isNativePlatform = cap.isNativePlatform;
+  if (typeof isNativePlatform === "function") {
+    return isNativePlatform();
+  }
+
+  // В крайнем случае — false
+  return false;
 }
 
 /** Имя платформы: 'android' | 'ios' | 'web'. */

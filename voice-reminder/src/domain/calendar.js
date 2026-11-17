@@ -317,46 +317,50 @@ export function nextOccurrences(s, after = Date.now(), limit = 5) {
   }
   return out;
 }
-export const shortTime = (t, tz = zone()) =>
-  new Intl.DateTimeFormat("ru-RU", {
+export const shortTime = (t, tz = zone(), language = "ru") =>
+  new Intl.DateTimeFormat(language === "en" ? "en-US" : "ru-RU", {
     timeZone: tz,
     hour: "2-digit",
     minute: "2-digit",
     hourCycle: "h23",
   }).format(new Date(t));
-export function describe(s) {
+export function describe(s, language = "ru") {
+  const en = language === "en";
+  const locale = en ? "en-US" : "ru-RU";
   if (s.kind === "once")
-    return new Intl.DateTimeFormat("ru-RU", {
+    return new Intl.DateTimeFormat(locale, {
       day: "numeric",
       month: "long",
       year: "numeric",
     }).format(new Date(s.at));
   if (s.kind === "interval")
-    return `Каждые ${s.intervalMinutes} мин${s.windowStart ? " · " + s.windowStart + "–" + s.windowEnd : ""}`;
+    return `${en ? "Every" : "Каждые"} ${s.intervalMinutes} ${en ? "min" : "мин"}${s.windowStart ? " · " + s.windowStart + "–" + s.windowEnd : ""}`;
   if (s.specificDates?.length)
-    return `Указанные даты: ${s.specificDates.join(", ")}`;
-  const wd = ["", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
+    return s.frequency === "daily" ? (en ? "Every day" : "Каждый день") : "";
+  const wd = en
+    ? ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    : ["", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
   let text = {
-    daily: +s.interval === 1 ? "Каждый день" : `Раз в ${s.interval} дней`,
+    daily: +s.interval === 1 ? (en ? "Every day" : "Каждый день") : `${en ? "Every" : "Раз в"} ${s.interval} ${en ? "days" : "дней"}`,
     weekly:
       s.weekdays.map((d) => wd[d]).join(", ") +
-      (+s.interval > 1 ? ` · каждые ${s.interval} недели` : ""),
-    monthly: `${s.monthDays?.join(", ") || ""} числа · каждый ${+s.interval > 1 ? s.interval + "-й " : ""}месяц`,
-    yearly: "Каждый год",
+      (+s.interval > 1 ? ` · ${en ? "every" : "каждые"} ${s.interval} ${en ? "weeks" : "недели"}` : ""),
+    monthly: `${s.monthDays?.join(", ") || ""} ${en ? "day(s) · every " : "числа · каждый "}${+s.interval > 1 ? s.interval + (en ? "th " : "-й ") : ""}${en ? "month" : "месяц"}`,
+    yearly: en ? "Every year" : "Каждый год",
   }[s.frequency];
   if (s.ordinal)
-    text = `${+s.ordinal === -1 ? "Последний" : s.ordinal + "-й"} ${wd[s.weekday]} месяца`;
-  if (s.lastDay) text = "Последний день месяца";
+    text = `${+s.ordinal === -1 ? (en ? "Last" : "Последний") : s.ordinal + (en ? "th" : "-й")} ${wd[s.weekday]} ${en ? "of the month" : "месяца"}`;
+  if (s.lastDay) text = en ? "Last day of month" : "Последний день месяца";
   if (s.dayParity !== "any")
     text +=
-      (text === "Каждый день" ? "" : " · ") +
-      (s.dayParity === "even" ? "По чётным числам" : "По нечётным числам");
-  if (s.dayParity !== "any" && text.startsWith("Каждый день"))
-    text = text.replace("Каждый день", "");
+      (text === (en ? "Every day" : "Каждый день") ? "" : " · ") +
+      (s.dayParity === "even" ? (en ? "Even dates" : "По чётным числам") : (en ? "Odd dates" : "По нечётным числам"));
+  if (s.dayParity !== "any" && text.startsWith(en ? "Every day" : "Каждый день"))
+    text = text.replace(en ? "Every day" : "Каждый день", "");
   if (s.monthDays?.length && s.frequency !== "monthly")
-    text += " · " + s.monthDays.join(", ") + " числа";
-  if (s.months?.length) text += " · месяцы " + s.months.join(", ");
-  if (s.until) text += " · до " + s.until;
-  if (s.count) text += " · " + s.count + " срабатываний";
+    text += " · " + s.monthDays.join(", ") + (en ? " dates" : " числа");
+  if (s.months?.length) text += " · " + (en ? "months " : "месяцы ") + s.months.join(", ");
+  if (s.until) text += " · " + (en ? "until " : "до ") + s.until;
+  if (s.count) text += " · " + s.count + (en ? " occurrences" : " срабатываний");
   return text;
 }

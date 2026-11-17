@@ -9,13 +9,15 @@ android {
         applicationId "ru.voicereminder.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "1.0.2-test"
+        versionCode 22
+        versionName "1.5.12-test"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+            // Модель Vosk читается напрямую из assets, без сжатия.
+            noCompress 'mdl', 'fst', 'int', 'dubm', 'conf', 'mat'
         }
     }
     buildTypes {
@@ -34,6 +36,7 @@ repositories {
 
 dependencies {
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"
+    implementation "com.alphacephei:vosk-android:0.3.75"
     testImplementation "org.json:json:20250517"
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"

@@ -328,6 +328,7 @@ export function parseIntent(phrase, now = new Date()) {
     text,
     schedule: s,
     originalTranscript: phrase,
+    dateFound: Boolean(parsed.dateFound || specific?.dates?.length),
     issues: [...new Set(issues)],
     confidence: issues.length ? "needsConfirmation" : "parsed",
   };

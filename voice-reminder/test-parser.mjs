@@ -3,13 +3,16 @@ import { parseReminder } from './src/lib/timeParser.js';
 // ВАЖНО про точность: `fmt` выводит минуты без секунд, а относительные фразы
 // отсчитываются от «сейчас» в момент разбора. Поэтому для таких случаев задан
 // допуск в минутах — иначе тест ловил бы переход через границу минуты.
-const now = new Date();
+// Фиксированная дата делает относительные и даты без года воспроизводимыми.
+// Конструктор с компонентами использует локальный часовой пояс, как и парсер.
+const now = new Date(2026, 9, 7, 12, 30, 0, 0);
 const p = (n) => String(n).padStart(2, '0');
 const fmt = (d) => `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
 const at = (dayShift, h, m = 0) => { const d = addDays(now, dayShift); d.setHours(h, m, 0, 0); return fmt(d); };
 const inMin = (n) => fmt(new Date(now.getTime() + n * 60e3));
 const atClock = (h, m = 0) => { const d = new Date(now); d.setHours(h, m, 0, 0); if (d <= now) d.setDate(d.getDate() + 1); return fmt(d); };
+const normalizeText = (text) => text.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
 const TOL = 2;   // допуск для относительных фраз, в минутах
 
 // [фраза, ожидаемое "когда" (null — зависит от текущего времени), ожидаемый текст действия, допуск в минутах]
@@ -77,7 +80,7 @@ const cases = [
 
 let pass = 0, fail = 0;
 for (const [phrase, expectWhen, expectText, tolMin] of cases) {
-  const r = parseReminder(phrase);
+  const r = parseReminder(phrase, now);
   const got = fmt(r.when);
   let okTime;
   if (expectWhen === null) {
@@ -87,7 +90,9 @@ for (const [phrase, expectWhen, expectText, tolMin] of cases) {
   } else {
     okTime = got === expectWhen;
   }
-  const okText = r.text.toLowerCase().replace(/ё/g, 'е').includes(expectText.toLowerCase().replace(/ё/g, 'е').slice(0, 8));
+  // «ё» и «е» — варианты написания одного слова; проверяем смысловой текст,
+  // а не требуем от парсера переписывать пользовательскую орфографию.
+  const okText = normalizeText(r.text).includes(normalizeText(expectText).slice(0, 8));
   if (okTime && okText) { pass++; console.log(`✅ "${phrase}"\n     → ${got} | "${r.text}"`); }
   else { fail++; console.log(`❌ "${phrase}"\n     → ${got} | "${r.text}" (ожидалось ${expectWhen || '—'} | ${expectText})`); }
 }

@@ -3,9 +3,11 @@ import android.app.*;
 import android.content.*;
 import android.net.Uri;
 import android.os.Build;
+import android.util.Log;
 import ru.voicereminder.app.MainActivity;
 import org.json.*;
 public final class AlarmScheduler {
+ private static final String TAG="RemindMeAlarm";
  public static final String FIRE="ru.voicereminder.FIRE",RETRY="ru.voicereminder.RETRY",ACK="ru.voicereminder.ACK",SNOOZE="ru.voicereminder.SNOOZE";
  public static PendingIntent pending(Context c,String action,String id){Intent i=new Intent(c,AlarmReceiver.class).setAction(action).setData(Uri.parse("raminde://"+action+"/"+Uri.encode(id))).putExtra("id",id);return PendingIntent.getBroadcast(c,0,i,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
  public static boolean exact(Context c){return Build.VERSION.SDK_INT<31||c.getSystemService(AlarmManager.class).canScheduleExactAlarms();}
@@ -13,9 +15,9 @@ public final class AlarmScheduler {
  // Android may display a next-alarm icon; the show intent opens the reminder list.
  Intent show=new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
  PendingIntent showIntent=PendingIntent.getActivity(c,0,show,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
- am.setAlarmClock(new AlarmManager.AlarmClockInfo(time,showIntent),pending(c,action,id));}
- public static void cancel(Context c,String action,String id){c.getSystemService(AlarmManager.class).cancel(pending(c,action,id));}
- public static void plan(Context c,ReminderStore db,JSONObject rule)throws Exception {cancel(c,FIRE,rule.getString("id"));long next=rule.optBoolean("enabled",true)?ScheduleEngine.next(rule.getJSONObject("schedule"),System.currentTimeMillis()):0;rule.put("nextTriggerAt",next>0?next:JSONObject.NULL);if(next==0)rule.put("enabled",false);db.put("rules","rid",rule.getString("id"),rule);if(next>0)at(c,FIRE,rule.getString("id"),next);}
+ am.setAlarmClock(new AlarmManager.AlarmClockInfo(time,showIntent),pending(c,action,id));Log.i(TAG,"alarm scheduled action="+action+" id="+id+" at="+time);}
+ public static void cancel(Context c,String action,String id){c.getSystemService(AlarmManager.class).cancel(pending(c,action,id));Log.i(TAG,"alarm cancelled action="+action+" id="+id);}
+ public static void plan(Context c,ReminderStore db,JSONObject rule)throws Exception {cancel(c,FIRE,rule.getString("id"));long next=rule.optBoolean("enabled",true)?ScheduleEngine.next(rule.getJSONObject("schedule"),System.currentTimeMillis()):0;rule.put("nextTriggerAt",next>0?next:JSONObject.NULL);if(next==0)rule.put("enabled",false);db.put("rules","rid",rule.getString("id"),rule);if(next>0)at(c,FIRE,rule.getString("id"),next);Log.i(TAG,"rule planned id="+rule.getString("id")+" next="+next);}
  public static void restore(Context c){restore(c,"app_resume");}
  public static void restore(Context c,String source){
   try(ReminderStore db=new ReminderStore(c)){
@@ -44,7 +46,7 @@ public final class AlarmScheduler {
      if(next>0)try{at(c,RETRY,e.getString("id"),Math.max(next,System.currentTimeMillis()+1000));scheduledCount++;}catch(Exception ex){lastError=ex.getClass().getSimpleName()+": "+ex.getMessage();db.diagnostic("Ошибка восстановления повтора: "+lastError);}
     }
    }
-   status.put("scheduled",scheduledCount).put("completedAt",System.currentTimeMillis()).put("error",lastError==null?JSONObject.NULL:lastError);db.writeRestoreStatus(status);
+   status.put("scheduled",scheduledCount).put("completedAt",System.currentTimeMillis()).put("error",lastError==null?JSONObject.NULL:lastError);db.writeRestoreStatus(status);Log.i(TAG,"restore source="+source+" scheduled="+scheduledCount+" error="+lastError);
   }catch(Exception ex){android.util.Log.e("RemindMeRestore","Restore failed",ex);try(ReminderStore db=new ReminderStore(c)){db.diagnostic("Ошибка восстановления: "+ex.getClass().getSimpleName()+": "+ex.getMessage());}catch(Exception ignored){}}
  }
 }

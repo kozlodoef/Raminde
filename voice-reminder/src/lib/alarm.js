@@ -21,7 +21,10 @@ export { planTimer, dueReminders, MAX_TIMEOUT };
 const CHANNEL_ID = 'voice_reminder_alarms';
 const CHANNEL_NAME = 'Напоминания';
 const CHANNEL_DESC = 'Голосовые напоминания';
-const CHANNEL_SOUND = 'default';
+
+// Для валидного smallIcon: создаём монохромный статический drawable
+// В production APK должен быть ресурс ic_stat_voice_reminder в res/drawable/
+const SMALL_ICON = 'ic_stat_voice_reminder';
 
 let channelReady = null;
 
@@ -37,18 +40,20 @@ async function getLocalNotifications() {
 }
 
 /** Создаёт канал уведомлений с высоким приоритетом (иначе звука не будет). */
-async function ensureChannel(LN) {
+async function ensureChannel(LN, settings = {}) {
   if (channelReady) return channelReady;
   channelReady = (async () => {
     try {
+      // Поле sound намеренно не передаём: плагин использует системный звук
+      // по умолчанию. Значение "default" ошибочно воспринимается как имя
+      // отсутствующего raw-ресурса. См. SoundResolver в плагине.
       await LN.createChannel({
         id: CHANNEL_ID,
         name: CHANNEL_NAME,
         description: CHANNEL_DESC,
         importance: 5,        // IMPORTANCE_HIGH — всплывающее уведомление со звуком
         visibility: 1,        // видно на экране блокировки
-        sound: CHANNEL_SOUND,
-        vibration: true,
+        vibration: settings.vibration !== false,
       });
     } catch (e) {
       // Канал мог уже существовать — это не ошибка.
@@ -75,9 +80,11 @@ export async function requestNotificationPermission() {
 
 /**
  * Ставит напоминание в системный будильник.
- * @returns {Promise<{scheduled:boolean, reason?:string}>}
+ * @param {Object} reminder - объект напоминания с id, text, when (timestamp)
+ * @param {Object} settings - настройки доставки: mode, sound, vibration, voiceEnabled
+ * @returns {Promise<{scheduled:boolean, reason?:string, error?:string}>}
  */
-export async function scheduleAlarm(reminder) {
+export async function scheduleAlarm(reminder, settings = {}) {
   const at = toTime(reminder?.when);
   if (at === null) return { scheduled: false, reason: 'invalid' };
   if (at <= Date.now()) return { scheduled: false, reason: 'past' };
@@ -86,22 +93,28 @@ export async function scheduleAlarm(reminder) {
   if (!LN) return { scheduled: false, reason: 'web' };
 
   try {
-    await ensureChannel(LN);
+    await ensureChannel(LN, settings);
+
+    const mode = settings.deliveryMode || 'voiceAndNotification';
+    const notificationBody = reminder.text || 'Напоминание';
+    const title = '⏰ Напоминание';
+
     await LN.schedule({
       notifications: [{
         id: idFromReminder(reminder),
-        title: '⏰ Напоминание',
-        body: reminder.text || 'Напоминание',
+        title,
+        body: notificationBody,
         channelId: CHANNEL_ID,
         schedule: { at: new Date(at), allowWhileIdle: true },
-        smallIcon: 'ic_stat_icon_config_sample',
-        sound: CHANNEL_SOUND,
+        smallIcon: SMALL_ICON,
+        // sound намеренно не задаём: канал использует системный звук по умолчанию.
       }],
     });
-    return { scheduled: true };
+
+    return { scheduled: true, mode };
   } catch (e) {
     console.warn('Напоминание не поставлено в будильник:', e);
-    return { scheduled: false, reason: String(e?.message || e) };
+    return { scheduled: false, reason: String(e?.message || e), error: e?.message };
   }
 }
 

@@ -4,9 +4,9 @@ const R_KEY = 'vr.reminders';
 const S_KEY = 'vr.settings';
 
 export const DEFAULT_SETTINGS = {
-  // 'voice' — после звукового сигнала озвучивать напоминание голосом;
-  // 'push'  — после звукового сигнала присылать только push-уведомление.
-  alertMode: 'voice',
+  // 'notification'          — звуковой сигнал + системное уведомление, без TTS;
+  // 'voiceAndNotification'  — звуковой сигнал + уведомление + нативное озвучивание.
+  alertMode: 'voiceAndNotification',
   pushEnabled: true,
 };
 

@@ -21,6 +21,13 @@ const NUM_WORDS = {
   десять: 10,
   одиннадцать: 11,
   двенадцать: 12,
+  тринадцать: 13,
+  четырнадцать: 14,
+  пятнадцать: 15,
+  шестнадцать: 16,
+  семнадцать: 17,
+  восемнадцать: 18,
+  девятнадцать: 19,
 };
 
 // Родительный падеж ("которого") — для "пол-Х", "половина Х", "без N Х"
@@ -411,9 +418,53 @@ export function parseReminder(phrase, baseArg) {
       }
     }
 
+    // If the first number matched the hour, consume an immediately following
+    // minute number as well ("в восемь пятнадцать" / "в 8 часов 15 минут").
+    if (hour !== null && minute === 0 && pod === null) {
+      const last = consumed.at(-1);
+      const restStart = last ? last.index + last.match.length : 0;
+      const minuteHit = s.slice(restStart).match(
+        new RegExp("^\\s+(" + NUM_EXPR + ")(?:\\s+минут" + RU + ")?" + WB_R),
+      );
+      if (minuteHit) {
+        const minutes = wordToNum(minuteHit[1]);
+        if (minutes !== null && minutes < 60) {
+          minute = minutes;
+          consumed.push({
+            match: minuteHit[0],
+            index: restStart,
+          });
+        }
+      }
+    }
+
     // "в шесть с четвертью"
     if (hour !== null && minute === 0) {
       if (eat(mkRe("с\\s+четверть(?:ю)?" + WB_R))) minute = 15;
+    }
+
+    // Разговорная запись времени двумя числами: "в восемь пятнадцать",
+    // "в двадцать один сорок пять", а также "в 8 часов 15 минут".
+    if (hour === null) {
+      const m = eat(
+        mkRe(
+          "(?:где-то\\s+в|примерно\\s+в|около\\s+в|в|у)\\s+(" +
+            NUM_EXPR +
+            ")(?:\\s+час" + RU + ")?\\s+(" +
+            NUM_EXPR +
+            ")(?:\\s+минут" + RU + ")" + WB_R,
+        ),
+      );
+      if (m) {
+        const h = wordToNum(m[1]), minutes = wordToNum(m[2]);
+        if (h !== null && minutes !== null && h >= 0 && h <= 23 && minutes < 60) {
+          hour = h;
+          minute = minutes;
+          timeFound = true;
+        } else {
+          consumed.pop();
+        }
+      }
     }
 
     // часть суток: "утра", "вечером"... — поглощаем один раз.

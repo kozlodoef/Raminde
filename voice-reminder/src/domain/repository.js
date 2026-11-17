@@ -7,11 +7,34 @@ import {
   zone,
 } from "./calendar.js";
 export const Native = registerPlugin("ReminderEngine");
+import { EVENT_COLORS } from "./interaction.js";
+
+/** Поддерживаются ровно два режима доставки. */
+export const DELIVERY_NOTIFICATION = "notification";
+export const DELIVERY_VOICE_AND_NOTIFICATION = "voiceAndNotification";
+export const DEFAULT_DELIVERY_MODE = DELIVERY_VOICE_AND_NOTIFICATION;
+
+/**
+ * Сводит режим доставки к двум поддерживаемым вариантам.
+ *
+ * Исторически существовал отдельный режим "voice" (только голос, без
+ * уведомления). Он отменён: без звукового уведомления пользователь может
+ * пропустить событие. Старый "voice" превращается в "голос + уведомление",
+ * то есть голос сохраняется и к нему добавляется уведомление со звуком.
+ * Всё, что явно означает «только уведомление», остаётся таким.
+ */
+export function normalizeMode(mode) {
+  if (mode === DELIVERY_NOTIFICATION || mode === "push" || mode === "onlyNotification")
+    return DELIVERY_NOTIFICATION;
+  return DELIVERY_VOICE_AND_NOTIFICATION;
+}
+
 export const defaults = {
   name: "",
   onboarded: false,
+  language: "ru",
   theme: "system",
-  mode: "voiceAndNotification",
+  mode: DEFAULT_DELIVERY_MODE,
   repeat: false,
   repeatMinutes: 5,
   maxAttempts: 12,
@@ -23,8 +46,11 @@ export const defaults = {
   privateNotification: false,
   rate: 0.95,
   pickerSound: false,
+  soundVariant: "soft",
+  customSoundUri: "",
 };
 const KEY = "raminde.v2";
+
 export function emptyState() {
   return {
     reminders: [],
@@ -41,7 +67,7 @@ function readWeb() {
       return {
         ...emptyState(),
         ...state,
-        settings: { ...defaults, ...state.settings },
+        settings: { ...defaults, ...state.settings, mode: normalizeMode(state.settings?.mode) },
       };
     const old = JSON.parse(localStorage.getItem("vr.reminders") || "[]");
     const valid = old
@@ -64,6 +90,28 @@ function readWeb() {
     return emptyState();
   }
 }
+function withColorIndexes(state) {
+  const list = state.reminders || [];
+  if (!list.length) return state;
+  // Цвета идут по кругу в порядке создания: 1-й, 2-й, ... 7-й, снова 1-й.
+  // Пересчёт чинит и старые записи, где цвет успел повториться.
+  const ordered = [...list]
+    .map((reminder, position) => ({ reminder, position }))
+    .sort((a, b) => (a.reminder.createdAt ?? 0) - (b.reminder.createdAt ?? 0) || a.position - b.position);
+  const assigned = new Map();
+  ordered.forEach(({ reminder }, index) => {
+    assigned.set(reminder, index % EVENT_COLORS.length);
+  });
+  const reminders = list.map((reminder) =>
+    reminder.colorIndex === assigned.get(reminder)
+      ? reminder
+      : { ...reminder, colorIndex: assigned.get(reminder) },
+  );
+  return reminders.some((reminder, index) => reminder !== list[index])
+    ? { ...state, reminders }
+    : state;
+}
+
 export async function getState() {
   if (isNative()) {
     let result = await Native.getState();
@@ -75,28 +123,27 @@ export async function getState() {
       });
       localStorage.setItem("raminde.nativeMigrated", "yes");
     }
-    return { ...result, settings: { ...defaults, ...result.settings } };
+    return { ...withColorIndexes(result), settings: { ...defaults, ...result.settings, mode: normalizeMode(result.settings?.mode) } };
   }
-  return readWeb();
+  return withColorIndexes(readWeb());
 }
 function saveWeb(state) {
   localStorage.setItem(KEY, JSON.stringify(state));
   return state;
 }
 export async function setSettings(settings) {
-  if (isNative()) return Native.settings({ settings });
+  if (isNative()) return Native.settings({ settings: { ...settings, mode: normalizeMode(settings.mode) } });
   const s = readWeb();
-  s.settings = { ...defaults, ...settings };
+  s.settings = { ...defaults, ...settings, mode: normalizeMode(settings.mode) };
   return saveWeb(s);
 }
-export async function putReminder(reminder, { reservation = null } = {}) {
+export async function putReminder(reminder, { reservation = null, now = Date.now() } = {}) {
   if (isNative()) return Native.upsert({ reminder, reservation });
   const s = readWeb();
   const existing = s.reminders.find((r) => r.id === reminder.id);
-  const month = localDate(new Date(), s.quota.timezone).slice(0, 7);
+  const month = localDate(new Date(now), s.quota.timezone).slice(0, 7);
   if (month !== s.quota.month) s.quota = { ...s.quota, month, used: 0 };
-  if (!existing && !reservation && s.quota.used >= 10) throw new Error("QUOTA");
-  const next = nextOccurrences(reminder.schedule, Date.now(), 1)[0];
+  const next = nextOccurrences(reminder.schedule, now, 1)[0];
   if (reminder.enabled && !next)
     throw new Error("Нет будущих дат для этого расписания");
   s.reminders = existing
@@ -180,11 +227,11 @@ export async function requestPermissions() {
     await Notification.requestPermission();
   return permissions();
 }
-export async function speakName(text) {
-  if (isNative()) return Native.speak({ text });
+export async function speakName(text, language = "ru") {
+  if (isNative()) return Native.speak({ text, language });
   if (window.speechSynthesis) {
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "ru-RU";
+    utterance.lang = language === "en" ? "en-US" : "ru-RU";
     speechSynthesis.speak(utterance);
   }
 }
@@ -199,4 +246,17 @@ export async function skipNext(reminder) {
       excludedInstants: [...(reminder.schedule.excludedInstants || []), next],
     },
   });
+}
+
+export async function excludeDate(reminder, date) {
+  if (reminder.schedule.kind === "once" || reminder.schedule.kind === "interval")
+    return deleteReminder(reminder.id);
+  const schedule = {
+    ...reminder.schedule,
+    excludedDates: [...new Set([...(reminder.schedule.excludedDates || []), date])],
+  };
+  const candidate = { ...reminder, schedule };
+  if (!nextOccurrences(schedule, Date.now(), 1).length)
+    return deleteReminder(reminder.id);
+  return putReminder(candidate);
 }

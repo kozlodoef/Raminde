@@ -8,6 +8,11 @@ import {
 } from "../src/domain/calendar.js";
 import { parseIntent, parseIntents, splitIntentPhrases } from "../src/domain/intent.js";
 import { isNative } from "../src/lib/native.js";
+import {
+  issuesAfterDraftChange,
+  unresolvedDraftIssues,
+  unresolvedDraftMessage,
+} from "../src/domain/draftValidation.js";
 const now = new Date("2026-10-07T12:30:00Z");
 const base = {
   ...defaultSchedule(now),
@@ -209,6 +214,23 @@ test("numeric date is not time", () => {
   assert.equal(new Date(r.schedule.at).getHours(), 10);
   assert.equal(r.text, "Сдать отчет");
 });
+
+test("spoken hour and minute are persisted in the parsed schedule", () => {
+  const now = new Date("2026-10-07T12:30:00Z");
+  for (const [phrase, expected] of [
+    ["Напомни в 08:15 позвонить", "08:15"],
+    ["Напомни в 09:00 позвонить", "09:00"],
+    ["Напомни в 14:30 позвонить", "14:30"],
+    ["Напомни в 21:45 позвонить", "21:45"],
+    ["Напомни в восемь пятнадцать позвонить", "08:15"],
+    ["Напомни в двадцать один сорок пять позвонить", "21:45"],
+  ]) {
+    const parsed = parseIntent(phrase, now);
+    assert.equal(parsed.issues.length, 0, phrase);
+    assert.equal(new Date(parsed.schedule.at).getHours(), Number(expected.slice(0, 2)), phrase);
+    assert.equal(new Date(parsed.schedule.at).getMinutes(), Number(expected.slice(3)), phrase);
+  }
+});
 test("invalid real date asks for correction", () =>
   assert.ok(
     parseIntent("Напомни 31 февраля 2027 в 9 утра позвонить врачу", now).issues
@@ -256,6 +278,14 @@ test("multiple times phrase", () =>
     parseIntent("Каждый день в 8 и 20 напомни пить воду", now).schedule.times,
     ["08:00", "20:00"],
   ));
+
+test("recurring spoken time survives scheduling across midnight", () => {
+  const parsed = parseIntent("Каждый день в 21:45 пить воду", new Date("2026-10-07T23:50:00Z"));
+  parsed.schedule.timezoneMode = "fixed";
+  parsed.schedule.timezone = "UTC";
+  assert.equal(parsed.schedule.times[0], "21:45");
+  assert.equal(new Date(nextOccurrences(parsed.schedule, Date.parse("2026-10-08T00:00:00Z"), 1)[0]).toISOString(), "2026-10-08T21:45:00.000Z");
+});
 test("missing time needs manual confirmation", () =>
   assert.ok(parseIntent("Напомни позвонить врачу", now).issues.length));
 test("skip a single occurrence preserves series", () => {
@@ -313,6 +343,10 @@ test("several explicitly named dates stay a finite date set", () => {
     ["2026-10-15T06:00:00.000Z", "2026-10-20T06:00:00.000Z"],
   );
 });
+test("dateFound distinguishes spoken dates from time-only phrases", () => {
+  assert.equal(parseIntents("Напомни 15 октября в 10 позвонить врачу", now)[0].dateFound, true);
+  assert.equal(parseIntents("Напомни в 10 позвонить врачу", now)[0].dateFound, false);
+});
 test("invalid date in a finite date set asks for correction", () => {
   const r = parseIntents(
     "Напомни 31 февраля 2027 и 20 марта 2027 в 10 позвонить врачу",
@@ -326,4 +360,90 @@ test("invalid day in a finite date set asks for correction", () => {
     now,
   )[0];
   assert.ok(r.issues.some((issue) => issue.includes("несуществующая дата")));
+});
+test("invalid finite date blocks the draft save gate", () => {
+  const r = parseIntents(
+    "Напомни 31 февраля 2027 и 15 марта 2027 в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  assert.deepEqual(r.schedule.specificDates, ["2027-03-15"]);
+  assert.match(unresolvedDraftMessage(r.issues), /Исправьте.*несуществующ/);
+});
+test("valid finite dates have no save-blocking issues", () => {
+  const r = parseIntents(
+    "Напомни 15 и 20 марта 2027 в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  assert.deepEqual(r.schedule.specificDates, ["2027-03-15", "2027-03-20"]);
+  assert.deepEqual(unresolvedDraftIssues(r.issues), []);
+  assert.equal(unresolvedDraftMessage(r.issues), "");
+});
+test("day zero remains blocked until the draft is corrected", () => {
+  const r = parseIntents(
+    "Напомни 0 марта и 20 марта в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  assert.match(unresolvedDraftMessage(r.issues), /Исправьте.*несуществующ/);
+});
+test("correcting the date list clears the save block", () => {
+  const invalid = parseIntents(
+    "Напомни 31 февраля 2027 и 15 марта 2027 в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  const corrected = parseIntents(
+    "Напомни 28 февраля 2027 и 15 марта 2027 в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  assert.notEqual(unresolvedDraftMessage(invalid.issues), "");
+  assert.deepEqual(corrected.issues, []);
+  assert.equal(unresolvedDraftMessage(corrected.issues), "");
+});
+test("an invalid edit cannot replace an existing finite date rule", () => {
+  const existing = parseIntents(
+    "Напомни 15 и 20 марта 2027 в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  const invalidEdit = parseIntents(
+    "Напомни 31 февраля 2027 и 15 марта 2027 в 10 позвонить врачу",
+    new Date("2026-10-15T12:00:00Z"),
+  )[0];
+  assert.equal(unresolvedDraftMessage(invalidEdit.issues).startsWith("Исправьте:"), true);
+  assert.deepEqual(existing.schedule.specificDates, ["2027-03-15", "2027-03-20"]);
+});
+test("time or text edits retain an invalid date issue", () => {
+  const issues = ["В списке есть несуществующая дата — исправьте даты"];
+  assert.deepEqual(issuesAfterDraftChange(issues, { times: ["11:00"] }), issues);
+  assert.deepEqual(issuesAfterDraftChange(issues, { text: "Другое" }), issues);
+});
+test("editing the date list releases a corrected date issue", () => {
+  const issues = ["В списке есть несуществующая дата — исправьте даты"];
+  assert.deepEqual(
+    issuesAfterDraftChange(issues, { specificDates: ["2027-02-28", "2027-03-15"] }),
+    [],
+  );
+});
+test("editing a one-time date releases its invalid date issue", () => {
+  const issues = ["Такой даты не существует"];
+  assert.deepEqual(
+    issuesAfterDraftChange(issues, { at: "2027-02-28T10:00:00.000Z" }),
+    [],
+  );
+});
+test("other schedule edits retain the invalid date issue", () => {
+  const issues = [
+    "В списке есть несуществующая дата — исправьте даты",
+    "Уточните время напоминания",
+  ];
+  assert.deepEqual(issuesAfterDraftChange(issues, { interval: 2 }), [
+    "В списке есть несуществующая дата — исправьте даты",
+  ]);
+});
+test("editing time clears other issues but retains an invalid date issue", () => {
+  const issues = [
+    "В списке есть несуществующая дата — исправьте даты",
+    "Уточните время напоминания",
+  ];
+  assert.deepEqual(issuesAfterDraftChange(issues, { times: ["10:00"] }), [
+    "В списке есть несуществующая дата — исправьте даты",
+  ]);
 });

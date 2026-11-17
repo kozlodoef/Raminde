@@ -11,8 +11,36 @@ function ctx() {
   return audioCtx;
 }
 
+/** Короткий шелест для анимации удаления карточки. */
+export function playSwish() {
+  try {
+    const c = ctx();
+    const duration = 0.28;
+    const buffer = c.createBuffer(1, Math.floor(c.sampleRate * duration), c.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < data.length; i++) {
+      const t = i / data.length;
+      data[i] = (Math.random() * 2 - 1) * Math.sin(Math.PI * t) * 0.35;
+    }
+    const source = c.createBufferSource();
+    source.buffer = buffer;
+    const filter = c.createBiquadFilter();
+    filter.type = "bandpass";
+    filter.frequency.value = 1800;
+    filter.Q.value = 0.7;
+    const gain = c.createGain();
+    gain.gain.setValueAtTime(0.0001, c.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.22, c.currentTime + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + duration);
+    source.connect(filter).connect(gain).connect(c.destination);
+    source.start();
+  } catch (error) {
+    console.warn("Не удалось воспроизвести звук удаления:", error);
+  }
+}
+
 /** Привлекающий внимание прерывистый сигнал "би-буп" по кругу, пока не остановят. */
-export function playAlarm(loop = true) {
+export function playAlarm(loop = true, variant = "soft") {
   try {
     stopAlarm();
     const c = ctx();
@@ -35,10 +63,13 @@ export function playAlarm(loop = true) {
     let timer = null;
     const cycle = () => {
       const t = c.currentTime;
-      beep(880, t, 0.18);
-      beep(660, t + 0.25, 0.18);
-      beep(880, t + 0.5, 0.18);
-      beep(1100, t + 0.8, 0.3);
+      const patterns = {
+        soft: [[660, 0, 0.16], [880, 0.28, 0.22]],
+        bright: [[880, 0, 0.14], [1100, 0.2, 0.14], [1320, 0.4, 0.22]],
+        pulse: [[520, 0, 0.22], [520, 0.34, 0.22], [520, 0.68, 0.22]],
+      };
+      for (const [frequency, offset, duration] of patterns[variant] || patterns.soft)
+        beep(frequency, t + offset, duration);
       if (loop) timer = setTimeout(cycle, 1400);
     };
     cycle();
@@ -57,16 +88,17 @@ export function stopAlarm() {
 }
 
 /** Голосовое озвучивание текста (ru, если доступен). */
-export function speak(text, { rate = 0.95, pitch = 1, onend } = {}) {
+export function speak(text, { rate = 0.95, pitch = 1, onend, lang = 'ru-RU' } = {}) {
   if (!('speechSynthesis' in window)) { onend && onend(); return false; }
   try {
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'ru-RU';
+    u.lang = lang;
     u.rate = rate;
     u.pitch = pitch;
-    const ruVoice = window.speechSynthesis.getVoices().find(v => v.lang.startsWith('ru'));
-    if (ruVoice) u.voice = ruVoice;
+    const prefix = lang.toLowerCase().startsWith('en') ? 'en' : 'ru';
+    const voice = window.speechSynthesis.getVoices().find(v => v.lang.toLowerCase().startsWith(prefix));
+    if (voice) u.voice = voice;
     u.onend = () => onend && onend();
     window.speechSynthesis.speak(u);
     return true;
