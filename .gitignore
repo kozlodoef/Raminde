@@ -12,6 +12,7 @@ android/build/
 android/app/build/
 android/local.properties
 android/.idea/
+android/.kotlin/
 *.apk
 *.aab
 
@@ -28,4 +29,24 @@ android/.idea/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
-android/.kotlin/
+
+# Android-эмуляторы и временные каталоги сборки.
+# Эти каталоги появляются, когда сборка или проверка APK перенаправляет
+# ANDROID_USER_HOME / GRADLE_USER_HOME / TMP внутрь проекта. Один раз это
+# уже привело к тому, что в рабочей папке оказалось ~19 ГБ образов эмулятора.
+.android-home/
+.android-emulator*/
+.android-build-*/
+.adb-temp/
+.gradle-local*/
+.old-emulator-*/
+android-build-*/
+apk-inspect-*/
+.apk-inspect-*/
+.apk-final-check-*/
+.apk-notify-check-*/
+
+# Дампы интерфейса эмулятора и его скриншоты
+.apk-ui.xml
+emulator-*.png
+emulator-*.xml
