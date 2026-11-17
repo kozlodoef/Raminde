@@ -1,9 +1,17 @@
 import { parseGroup } from "./groups.js";
+import { toDigits } from "./phrase-digits.js";
 
 // The editor shows the complete phrase; the stored reminder keeps only its subject.
-export function editorPhrase(draft) {
-  if (typeof draft.phrase === "string") return draft.phrase;
-  if (draft.originalTranscript) return draft.originalTranscript;
+//
+// Дату и время показываем цифрами: «завтра в семь утра» читается медленнее,
+// чем «18.11 в 07:00», и в цифрах легче заметить ошибку распознавания.
+// Исходная расшифровка при этом сохраняется в originalTranscript и не теряется.
+export function editorPhrase(draft, now = new Date()) {
+  const source =
+    typeof draft.phrase === "string"
+      ? draft.phrase
+      : draft.originalTranscript || "";
+  if (source) return toDigits(source, draft, now);
   return [
     draft.text || "",
     ...(draft.times || draft.schedule?.times || []).map((t) => `в ${t}`),

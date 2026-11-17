@@ -96,7 +96,8 @@ test("older saved drafts obtain a readable phrase", () => {
       text: "Таблетка",
       originalTranscript: "В 9 принять таблетку",
     }),
-    "В 9 принять таблетку",
+    // Время в редакторе показывается цифрами: «В 9» -> «в 09:00».
+    "в 09:00 принять таблетку",
   );
 });
 test("clear and immediate restart invalidate every old ASR callback", () => {
