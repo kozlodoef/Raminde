@@ -27,13 +27,10 @@ import {
 } from "./domain/repository.js";
 import {
   localDate,
-  defaultSchedule,
   describe,
   shortTime,
-  pad,
 } from "./domain/calendar.js";
 import {
-  COLORS,
   colorFor,
   buildGroup,
   occurrencesInMonth,
@@ -50,59 +47,20 @@ import {
   restoreKey,
 } from "./domain/billing.js";
 import { Modal, Toggle, AlarmBox, Icon } from "./ReminderControls.jsx";
+import NavIcon from "./components/NavIcon.jsx";
+import WelcomeModal from "./components/WelcomeModal.jsx";
+import DateConflictBubble from "./components/DateConflictBubble.jsx";
+import EventModal from "./components/EventModal.jsx";
+import DeleteGroupModal from "./components/DeleteGroupModal.jsx";
+import AccessModal from "./components/AccessModal.jsx";
+import {
+  eventCount,
+  blank,
+  cachedDrafts,
+  dateLabel,
+  shiftMonth,
+} from "./domain/draft-model.js";
 import "./planner.css";
-const uid = () => crypto.randomUUID();
-const eventCount = (n) =>
-  `${n} ${new Intl.PluralRules("ru").select(n) === "one" ? "событие" : new Intl.PluralRules("ru").select(n) === "few" ? "события" : "событий"}`;
-const blank = (index = 0) => ({
-  id: uid(),
-  text: "",
-  phrase: "",
-  selectedDates: [],
-  dates: [],
-  times: [],
-  color: COLORS[index % COLORS.length],
-  issues: [],
-});
-function cachedDrafts() {
-  try {
-    return JSON.parse(localStorage.getItem("raminde.drafts.v3") || "{}");
-  } catch {
-    return {};
-  }
-}
-const dateLabel = (d) =>
-  new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(
-    new Date(d + "T12:00:00"),
-  );
-function shiftMonth(m, step) {
-  const [y, n] = m.split("-").map(Number),
-    d = new Date(y, n - 1 + step, 1);
-  return d.getFullYear() + "-" + pad(d.getMonth() + 1);
-}
-function NavIcon({ name }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="23"
-      height="23"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      aria-hidden="true"
-    >
-      <path
-        d={
-          name === "home"
-            ? "M3 11l9-8 9 8M5 10v11h5v-7h4v7h5V10"
-            : name === "events"
-              ? "M5 4h14v17H5ZM8 2v5M16 2v5M5 9h14M8 13h3M8 17h7"
-              : "M12 8a4 4 0 1 0 0 8a4 4 0 0 0 0-8ZM9 3l-1 3-3 1-2 3 2 2-1 3 3 2 3-1 2 2 3-2 3 1 2-3-1-3 2-2-2-3-3-1-1-3Z"
-        }
-      />
-    </svg>
-  );
-}
 export default function App() {
   const [state, setState] = useState(null),
     [tab, setTab] = useState("home"),
@@ -908,242 +866,123 @@ export default function App() {
         )}
       </div>
       {modal === "welcome" && (
-        <Modal title="Говорите — мы напомним">
-          <p>
-            Нажмите «Начать», чтобы включить микрофон. «Готово» завершает
-            диктовку и сохраняет напоминание. Аудио обрабатывается системным
-            речевым сервисом, который может использовать интернет.
-          </p>
-          <p className="hint">
-            Во время создания выбирайте даты на календаре. Чтобы очистить текст,
-            нажмите крестик. Вне создания нажатие на дату открывает события дня.
-            Не более 12 срабатываний в день. Микрофон сам не включается.
-          </p>
-          <label className="field">
-            Как к вам обращаться
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ваше имя, необязательно"
-            />
-          </label>
-          <p className="hint">
-            Первый месяц бесплатно, без ограничений. Без автоматических
-            списаний.
-          </p>
-          <button
-            className="primary full"
-            onClick={async () => {
-              await setting({ name, onboarded: true });
-              setModal(null);
-            }}
-          >
-            Начать
-          </button>
-        </Modal>
+        <WelcomeModal
+          name={name}
+          onName={setName}
+          onStart={async () => {
+            await setting({ name, onboarded: true });
+            setModal(null);
+          }}
+        />
       )}
       {draft.dateConflict && !modal && (
-        <div className="floating-bubble conflict-bubble" role="alert">
-          <p>В тексте и календаре разные даты. Какие использовать?</p>
-          <button
-            className="secondary"
-            onClick={() => {
-              const dates =
-                draft.dateConflict.calendarDates ||
-                draft.dateConflict.selectedDates;
-              const next = {
-                ...draft,
+        <DateConflictBubble
+          onPickCalendar={() => {
+            const dates =
+              draft.dateConflict.calendarDates ||
+              draft.dateConflict.selectedDates;
+            const next = {
+              ...draft,
+              dates,
+              selectedDates: dates,
+              dateConflict: null,
+              schedule: {
+                ...defaultSchedule(),
+                kind: "dates",
                 dates,
-                selectedDates: dates,
-                dateConflict: null,
-                schedule: {
-                  ...defaultSchedule(),
-                  kind: "dates",
-                  dates,
-                  times: draft.times,
-                },
-              };
-              draftRef.current = next;
-              setDraft(next);
-              setCreating(true);
-              setMessage("");
-            }}
-          >
-            Даты календаря
-          </button>
-          <button
-            className="primary"
-            onClick={() => {
-              const next = parseEditor(editorPhrase(draft), {
-                ...draft,
-                selectedDates: [],
-              });
-              draftRef.current = next;
-              setDraft(next);
-              setCreating(true);
-              setMessage("");
-            }}
-          >
-            Даты из текста
-          </button>
-        </div>
+                times: draft.times,
+              },
+            };
+            draftRef.current = next;
+            setDraft(next);
+            setCreating(true);
+            setMessage("");
+          }}
+          onPickText={() => {
+            const next = parseEditor(editorPhrase(draft), {
+              ...draft,
+              selectedDates: [],
+            });
+            draftRef.current = next;
+            setDraft(next);
+            setCreating(true);
+            setMessage("");
+          }}
+        />
       )}
       {modal === "event" && editing?.rule && (
-        <Modal
-          title={editing.rule.text}
+        <EventModal
+          rule={editing.rule}
+          event={editing.event}
+          busy={busy}
+          voiceActive={voiceActive}
           onClose={() => {
             setEditing(null);
             setModal(null);
           }}
-        >
-          <p>{describe(editing.rule.schedule)}</p>
-          {editing.event && (
-            <p className="hint">
-              Выбрано: {dateLabel(editing.event.date)} · {editing.event.time}
-            </p>
-          )}
-          <button
-            className="primary full"
-            disabled={voiceActive || busy}
-            onClick={() => {
-              editRule(editing.rule);
+          onEdit={() => {
+            editRule(editing.rule);
+            setModal(null);
+          }}
+          onSkip={async () => {
+            const r = editing.rule;
+            try {
+              setState(await skipOccurrence(r.id, editing.event.at));
               setModal(null);
-            }}
-          >
-            Изменить группу
-          </button>
-          {editing.event && editing.event.at > Date.now() && (
-            <button
-              className="secondary full"
-              onClick={async () => {
-                const r = editing.rule;
-                try {
-                  setState(await skipOccurrence(r.id, editing.event.at));
-                  setModal(null);
-                } catch (e) {
-                  setMessage(e.message);
-                }
-              }}
-            >
-              Пропустить это срабатывание
-            </button>
-          )}
-          <button
-            className="secondary full"
-            onClick={async () => {
-              try {
-                if (editing.rule.enabled)
-                  setState(
-                    await putReminder({ ...editing.rule, enabled: false }),
-                  );
-                else await persist({ ...editing.rule, enabled: true });
-                setModal(null);
-              } catch (e) {
-                setMessage(e.message);
-              }
-            }}
-          >
-            {editing.rule.enabled ? "Приостановить группу" : "Включить группу"}
-          </button>
-          <button
-            className="text-button full danger"
-            onClick={() => setModal("delete")}
-          >
-            Удалить группу
-          </button>
-        </Modal>
+            } catch (e) {
+              setMessage(e.message);
+            }
+          }}
+          onToggle={async () => {
+            try {
+              if (editing.rule.enabled)
+                setState(
+                  await putReminder({ ...editing.rule, enabled: false }),
+                );
+              else await persist({ ...editing.rule, enabled: true });
+              setModal(null);
+            } catch (e) {
+              setMessage(e.message);
+            }
+          }}
+          onDelete={() => setModal("delete")}
+        />
       )}
       {modal === "delete" && editing?.rule && (
-        <Modal title="Удалить всю группу?" onClose={() => setModal("event")}>
-          <p>Будут отменены все будущие срабатывания «{editing.rule.text}».</p>
-          <button
-            className="primary full"
-            onClick={async () => {
-              setState(await deleteReminder(editing.rule.id));
-              setModal(null);
-              setEditing(null);
-            }}
-          >
-            Удалить
-          </button>
-        </Modal>
+        <DeleteGroupModal
+          rule={editing.rule}
+          onBack={() => setModal("event")}
+          onConfirm={async () => {
+            setState(await deleteReminder(editing.rule.id));
+            setModal(null);
+            setEditing(null);
+          }}
+        />
       )}
       {modal === "access" && (
-        <Modal title="Первый месяц — бесплатно" onClose={() => setModal(null)}>
-          <p>
-            Все функции и любое количество напоминаний в течение месяца с
-            первого запуска. Затем — месячная или годовая подписка.
-          </p>
-          <p className="hint">
-            Сохранённые напоминания не отключаются. Автоматических списаний нет.
-          </p>
-          {!billingConfigured || !bill?.configured ? (
-            <p className="notice">
-              В этой тестовой сборке эквайринг ещё не настроен. Настоящая оплата
-              недоступна.
-            </p>
-          ) : (
-            <>
-              <label className="field">
-                Email для чека
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
-              </label>
-              {["monthly", "yearly"].map((plan) => (
-                <button
-                  className="primary full"
-                  key={plan}
-                  onClick={() =>
-                    checkout(plan, email).catch((e) => setMessage(e.message))
-                  }
-                >
-                  {plan === "monthly" ? "Месяц" : "Год"} · {bill.prices[plan]} ₽
-                </button>
-              ))}
-              <button
-                className="secondary full"
-                onClick={() =>
-                  billingStatus()
-                    .then(setBill)
-                    .catch((e) => setMessage(e.message))
-                }
-              >
-                Проверить оплату
-              </button>
-            </>
-          )}
-          {billingConfigured && (
-            <>
-              <button
-                className="text-button full"
-                onClick={() => recoveryKey().then(setKey)}
-              >
-                Показать ключ восстановления
-              </button>
-              <label className="field">
-                Ключ доступа
-                <input
-                  value={key || ""}
-                  onChange={(e) => setKey(e.target.value)}
-                  autoComplete="off"
-                />
-              </label>
-              <button
-                className="secondary full"
-                onClick={() =>
-                  restoreKey(key)
-                    .then(setBill)
-                    .catch((e) => setMessage(e.message))
-                }
-              >
-                Восстановить доступ
-              </button>
-            </>
-          )}
-        </Modal>
+        <AccessModal
+          billingConfigured={billingConfigured}
+          bill={bill}
+          email={email}
+          onEmail={setEmail}
+          keyValue={key}
+          onKey={setKey}
+          onClose={() => setModal(null)}
+          onCheckout={(plan, mail) =>
+            checkout(plan, mail).catch((e) => setMessage(e.message))
+          }
+          onCheckStatus={() =>
+            billingStatus()
+              .then(setBill)
+              .catch((e) => setMessage(e.message))
+          }
+          onRecoveryKey={() => recoveryKey().then(setKey)}
+          onRestore={(k) =>
+            restoreKey(k)
+              .then(setBill)
+              .catch((e) => setMessage(e.message))
+          }
+        />
       )}
       {alarm && (
         <AlarmBox

@@ -60,43 +60,12 @@ export function stopAlarm() {
   }
 }
 
-/** Голосовое озвучивание текста (ru, если доступен). */
-export function speak(text, { rate = 0.95, pitch = 1, onend } = {}) {
-  if (!("speechSynthesis" in window)) {
-    onend && onend();
-    return false;
-  }
-  try {
-    window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ru-RU";
-    u.rate = rate;
-    u.pitch = pitch;
-    const ruVoice = window.speechSynthesis
-      .getVoices()
-      .find((v) => v.lang.startsWith("ru"));
-    if (ruVoice) u.voice = ruVoice;
-    u.onend = () => onend && onend();
-    window.speechSynthesis.speak(u);
-    return true;
-  } catch (e) {
-    console.warn("TTS недоступен:", e);
-    onend && onend();
-    return false;
-  }
-}
-
-export function cancelSpeech() {
-  if ("speechSynthesis" in window) {
-    try {
-      window.speechSynthesis.cancel();
-    } catch (_) {}
-  }
-}
-
-export function ttsAvailable() {
-  return "speechSynthesis" in window;
-}
+// Озвучка вынесена в lib/tts.js: у Web Speech API несколько дефектов
+// (пустой список голосов при старте, обрыв на длинном тексте, тишина после
+// cancel), которые нужно обходить явно. Ниже — реэкспорт для прежних
+// импортов из alerts.js и локальный импорт, нужный функции primeAudio.
+import { primeTts } from "./tts.js";
+export { speak, cancelSpeech, ttsAvailable, primeTts } from "./tts.js";
 
 /** Push-уведомления */
 export function pushSupported() {
@@ -143,8 +112,12 @@ export function primeAudio() {
     try {
       ctx();
     } catch (_) {}
-    // прогреваем TTS списком голосов
-    if ("speechSynthesis" in window) window.speechSynthesis.getVoices();
+    // Прогрев TTS. Браузеры грузят список голосов асинхронно: без прогрева
+    // первый speak() может не найти русский голос и озвучить чужим.
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.getVoices();
+      primeTts();
+    }
   }
 }
 
