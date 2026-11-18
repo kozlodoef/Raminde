@@ -201,6 +201,17 @@ export async function requestPermissions() {
     await Notification.requestPermission();
   return permissions();
 }
+/**
+ * Открывает системный экран «Полноэкранные уведомления».
+ *
+ * На Android 14+ без этого согласия напоминание не развернётся поверх
+ * блокировки, и его легко пропустить. На более старых версиях разрешение
+ * не требуется, поэтому функция сразу сообщает об успехе.
+ */
+export async function requestFullscreen() {
+  if (isNative()) return Native.requestFullscreen();
+  return { granted: true };
+}
 export async function speakName(text) {
   if (isNative()) return Native.speak({ text });
   if (window.speechSynthesis) {

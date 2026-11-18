@@ -23,6 +23,7 @@ import {
   fireWeb,
   permissions,
   requestPermissions,
+  requestFullscreen,
   speakName,
 } from "./domain/repository.js";
 import {
@@ -800,6 +801,8 @@ export default function App() {
                 .{" "}
                 {isNative() &&
                   `Точные будильники: ${perms?.exact ? "разрешены" : "нужно разрешение"}.`}
+                {isNative() &&
+                  ` Напоминание поверх блокировки: ${perms?.fullscreen ? "разрешено" : "нужно разрешение"}.`}
               </p>
               <button
                 className="secondary full"
@@ -811,6 +814,19 @@ export default function App() {
               >
                 Проверить разрешения
               </button>
+              {isNative() && perms && !perms.fullscreen && (
+                <button
+                  className="text-button full"
+                  onClick={() =>
+                    requestFullscreen()
+                      .then(() => permissions())
+                      .then(setPerms)
+                      .catch((e) => setMessage(e.message))
+                  }
+                >
+                  Разрешить напоминание поверх блокировки
+                </button>
+              )}
               <button
                 className="text-button full"
                 onClick={() =>
