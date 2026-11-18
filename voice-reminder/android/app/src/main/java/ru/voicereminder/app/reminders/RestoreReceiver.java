@@ -9,12 +9,21 @@ import android.util.Log;
 
 /** Only restores schedules. Reminder/fire/ack actions stay in the private receiver. */
 public final class RestoreReceiver extends BroadcastReceiver {
+    /**
+     * Трансляция "пользователь выдал/забрал право на точные будильники".
+     * Появилась в Android 12 (API 31). Ссылаться на поле AlarmManager нельзя:
+     * на старых версиях его нет. Строка вписана явно - сравнивать её
+     * безопасно на любой версии Android, трансляция просто не придёт.
+     */
+    private static final String ACTION_EXACT_ALARM_PERMISSION_CHANGED =
+        "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED";
+
     public static boolean accepts(String action) {
         return Intent.ACTION_BOOT_COMPLETED.equals(action)
             || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
             || Intent.ACTION_TIME_CHANGED.equals(action)
             || Intent.ACTION_TIMEZONE_CHANGED.equals(action)
-            || AlarmManager.ACTION_SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED.equals(action);
+            || ACTION_EXACT_ALARM_PERMISSION_CHANGED.equals(action);
     }
     @Override public void onReceive(Context context, Intent intent) {
         final String action = intent.getAction();
