@@ -212,6 +212,17 @@ export async function requestFullscreen() {
   if (isNative()) return Native.requestFullscreen();
   return { granted: true };
 }
+/**
+ * Открывает системный запрос на отключение экономии батареи.
+ *
+ * На MIUI, EMUI и OneUI агрессивная экономия выгружает фон, и напоминание
+ * может не прозвучать вовремя. Функция лишь открывает нужный экран:
+ * окончательное решение остаётся за пользователем.
+ */
+export async function requestBattery() {
+  if (isNative()) return Native.requestBattery();
+  return { opened: true };
+}
 export async function speakName(text) {
   if (isNative()) return Native.speak({ text });
   if (window.speechSynthesis) {

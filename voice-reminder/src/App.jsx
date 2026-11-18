@@ -24,6 +24,7 @@ import {
   permissions,
   requestPermissions,
   requestFullscreen,
+  requestBattery,
   speakName,
 } from "./domain/repository.js";
 import {
@@ -803,6 +804,9 @@ export default function App() {
                   `Точные будильники: ${perms?.exact ? "разрешены" : "нужно разрешение"}.`}
                 {isNative() &&
                   ` Напоминание поверх блокировки: ${perms?.fullscreen ? "разрешено" : "нужно разрешение"}.`}
+                {isNative() &&
+                  perms?.battery === false &&
+                  " Экономия батареи включена: напоминание может задержаться."}
               </p>
               <button
                 className="secondary full"
@@ -825,6 +829,19 @@ export default function App() {
                   }
                 >
                   Разрешить напоминание поверх блокировки
+                </button>
+              )}
+              {isNative() && perms?.battery === false && (
+                <button
+                  className="text-button full"
+                  onClick={() =>
+                    requestBattery()
+                      .then(() => permissions())
+                      .then(setPerms)
+                      .catch((e) => setMessage(e.message))
+                  }
+                >
+                  Отключить экономию батареи
                 </button>
               )}
               <button

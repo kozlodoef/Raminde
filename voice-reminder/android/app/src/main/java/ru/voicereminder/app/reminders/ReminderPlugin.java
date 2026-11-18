@@ -20,7 +20,7 @@ public class ReminderPlugin extends Plugin {
   // Android 14+ (API 34) разрешает полноэкранные уведомления только с явного
   // согласия пользователя. Без этого напоминание не развернётся на
   // заблокированном экране и его легко пропустить.
-  r.put("fullscreen",fullscreenAllowed());
+  r.put("fullscreen",fullscreenAllowed());r.put("battery",batteryOk());
   r.put("platform","android");call.resolve(r);}
 
  /** Доступны ли полноэкранные уведомления (напоминание поверх блокировки). */
@@ -38,6 +38,42 @@ public class ReminderPlugin extends Plugin {
   * пользователь должен сам включить «Полноэкранные уведомления», иначе
   * напоминание не покажется поверх блокировки.
   */
+ /**
+  * Не экономит ли система батарею для приложения.
+  *
+  * На MIUI, EMUI, OneUI и других прошивках агрессивная экономия батареи
+  * выгружает фоновые процессы, и напоминание может не сработать. Проверка
+  * нужна, чтобы вовремя подсказать пользователю снять ограничение.
+  */
+ private boolean batteryOk(){
+  try{
+   PowerManager pm=(PowerManager)getContext().getSystemService(Context.POWER_SERVICE);
+   return pm!=null&&pm.isIgnoringBatteryOptimizations(getContext().getPackageName());
+  }catch(Exception e){return true;} // проверить не смогли - не пугаем пользователя
+ }
+
+ /**
+  * Открывает системный запрос на отключение экономии батареи.
+  *
+  * На части прошивок диалог открывается напрямую, на остальных показываем
+  * общий список приложений. Оба варианта безопасны на любой версии
+  * Android начиная с 7.0 (minSdk приложения).
+  */
+ @PluginMethod public void requestBattery(PluginCall call){
+  try{
+   Intent i=new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,Uri.parse("package:"+getContext().getPackageName()));
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+   getContext().startActivity(i);
+  }catch(Exception e){
+   try{
+    Intent i=new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS);
+    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    getContext().startActivity(i);
+   }catch(Exception ignored){}
+  }
+  JSObject r=new JSObject();r.put("opened",true);call.resolve(r);
+ }
+
  @PluginMethod public void requestFullscreen(PluginCall call){
   if(Build.VERSION.SDK_INT<34||fullscreenAllowed()){JSObject ok=new JSObject();ok.put("granted",true);call.resolve(ok);return;}
   try{
