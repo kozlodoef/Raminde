@@ -9,12 +9,35 @@ public final class AlarmScheduler {
  public static final String FIRE="ru.voicereminder.FIRE",RETRY="ru.voicereminder.RETRY",ACK="ru.voicereminder.ACK",SNOOZE="ru.voicereminder.SNOOZE";
  public static PendingIntent pending(Context c,String action,String id){Intent i=new Intent(c,AlarmReceiver.class).setAction(action).setData(Uri.parse("raminde://"+action+"/"+Uri.encode(id))).putExtra("id",id);return PendingIntent.getBroadcast(c,0,i,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);}
  public static boolean exact(Context c){return Build.VERSION.SDK_INT<31||c.getSystemService(AlarmManager.class).canScheduleExactAlarms();}
- public static void at(Context c,String action,String id,long time){AlarmManager am=c.getSystemService(AlarmManager.class);if(!exact(c))throw new IllegalStateException("Разрешите точные будильники в настройках Android");// User-requested reminder: AlarmClock alarms wake the device even in idle.
+ public static void at(Context c,String action,String id,long time){AlarmManager am=c.getSystemService(AlarmManager.class);
+  // Точные будильники (Android 12+) требуют отдельного разрешения. Если его
+  // нет, раньше бросали исключение и напоминание НЕ ставилось вообще:
+  // пользователь молча не получал ничего. Для главной функции приложения
+  // это недопустимо, поэтому есть запасной путь.
+  if(!exact(c)){fallback(c,am,action,id,time);return;}
+  // User-requested reminder: AlarmClock alarms wake the device even in idle.
  // Android may display a next-alarm icon; the show intent opens the reminder list.
  Intent show=new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);
  PendingIntent showIntent=PendingIntent.getActivity(c,0,show,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
  am.setAlarmClock(new AlarmManager.AlarmClockInfo(time,showIntent),pending(c,action,id));}
  public static void cancel(Context c,String action,String id){c.getSystemService(AlarmManager.class).cancel(pending(c,action,id));}
+
+ /**
+  * Запасной будильник, когда точные запрещены.
+  *
+  * setAndAllowWhileIdle будит устройство даже в Doze, но система может сдвинуть
+  * срабатывание на несколько минут: это лучше, чем пропустить напоминание
+  * полностью. Метод есть с API 23, поэтому приложение ставится на Android
+  * 7.0+ без дополнительных проверок версии.
+  */
+ private static void fallback(Context c,AlarmManager am,String action,String id,long time){
+  try{am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,time,pending(c,action,id));}
+  catch(Exception e){
+   // Совсем старые прошивки: обычный set тоже лучше, чем ничего.
+   try{am.set(AlarmManager.RTC_WAKEUP,time,pending(c,action,id));}catch(Exception ignored){}
+  }
+  try(ReminderStore db=new ReminderStore(c)){db.diagnostic("Точные будильники запрещены: напоминание поставлено с возможной задержкой");}catch(Exception ignored){}
+ }
  public static void plan(Context c,ReminderStore db,JSONObject rule)throws Exception {cancel(c,FIRE,rule.getString("id"));long next=rule.optBoolean("enabled",true)?ScheduleEngine.next(rule.getJSONObject("schedule"),System.currentTimeMillis()):0;rule.put("nextTriggerAt",next>0?next:JSONObject.NULL);if(next==0)rule.put("enabled",false);db.put("rules","rid",rule.getString("id"),rule);if(next>0)at(c,FIRE,rule.getString("id"),next);}
  public static void restore(Context c){restore(c,"app_resume");}
  public static void restore(Context c,String source){
@@ -22,7 +45,10 @@ public final class AlarmScheduler {
    JSONObject status=db.meta("restoreStatus");
    status.put("source",source).put("startedAt",System.currentTimeMillis()).put("completedAt",JSONObject.NULL).put("scheduled",0).put("error",JSONObject.NULL);
    db.writeRestoreStatus(status);
-   if(!exact(c)){status.put("error","Точные будильники отключены");db.writeRestoreStatus(status);db.diagnostic("Точные будильники отключены. Откройте настройки приложения.");return;}
+   // Точные будильники запрещены — не выходим, а ставим неточные через
+   // fallback внутри at(). Иначе после перезагрузки телефона не встало бы
+   // ни одно напоминание, хотя пользователь их создавал.
+   if(!exact(c)){status.put("error","Точные будильники отключены: напоминания могут срабатывать с задержкой");db.writeRestoreStatus(status);db.diagnostic("Точные будильники отключены. Откройте настройки приложения.");}
    int scheduledCount=0;String lastError=null;
    JSONArray rules=db.all("rules");
    for(int i=0;i<rules.length();i++){
