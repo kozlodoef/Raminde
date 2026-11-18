@@ -16,8 +16,39 @@ public class ReminderPlugin extends Plugin {
  @PluginMethod public void remove(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){String id=call.getString("id");AlarmScheduler.cancel(getContext(),AlarmScheduler.FIRE,id);JSONArray events=db.all("events");for(int i=0;i<events.length();i++){JSONObject e=events.optJSONObject(i);if(e.optString("reminderId").equals(id))AlarmReceiver.ack(getContext(),db,e.getString("id"),"deleted");}db.removeRule(id);call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
  @PluginMethod public void acknowledge(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){AlarmReceiver.ack(getContext(),db,call.getString("id"),call.getString("source","button"));call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
  @PluginMethod public void snooze(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){AlarmReceiver.snooze(getContext(),db,call.getString("id"),call.getInt("minutes",5));call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
- @PluginMethod public void permissions(PluginCall call){JSObject r=new JSObject();r.put("notifications",NotificationManagerCompat.from(getContext()).areNotificationsEnabled()?"granted":"denied");r.put("exact",AlarmScheduler.exact(getContext()));r.put("platform","android");call.resolve(r);}
+ @PluginMethod public void permissions(PluginCall call){JSObject r=new JSObject();r.put("notifications",NotificationManagerCompat.from(getContext()).areNotificationsEnabled()?"granted":"denied");r.put("exact",AlarmScheduler.exact(getContext()));
+  // Android 14+ (API 34) разрешает полноэкранные уведомления только с явного
+  // согласия пользователя. Без этого напоминание не развернётся на
+  // заблокированном экране и его легко пропустить.
+  r.put("fullscreen",fullscreenAllowed());
+  r.put("platform","android");call.resolve(r);}
+
+ /** Доступны ли полноэкранные уведомления (напоминание поверх блокировки). */
+ private boolean fullscreenAllowed(){
+  if(Build.VERSION.SDK_INT<34)return true; // до Android 14 разрешено по умолчанию
+  try{return getContext().getSystemService(android.app.NotificationManager.class).canUseFullScreenIntent();}
+  catch(Exception e){return false;}
+ }
  @PluginMethod public void requestPermissions(PluginCall call){if(Build.VERSION.SDK_INT>=33&&getPermissionState("notifications")!=PermissionState.GRANTED){requestPermissionForAlias("notifications",call,"notificationResult");return;}openExact(call);}
+
+ /**
+  * Открывает системный экран разрешения полноэкранных уведомлений.
+  *
+  * Отдельный метод, а не часть requestPermissions: на Android 14+
+  * пользователь должен сам включить «Полноэкранные уведомления», иначе
+  * напоминание не покажется поверх блокировки.
+  */
+ @PluginMethod public void requestFullscreen(PluginCall call){
+  if(Build.VERSION.SDK_INT<34||fullscreenAllowed()){JSObject ok=new JSObject();ok.put("granted",true);call.resolve(ok);return;}
+  try{
+   Intent i=new Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,Uri.parse("package:"+getContext().getPackageName()));
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+   getContext().startActivity(i);
+  }catch(Exception e){
+   try{getContext().startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,Uri.parse("package:"+getContext().getPackageName())).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));}catch(Exception ignored){}
+  }
+  JSObject r=new JSObject();r.put("opened",true);call.resolve(r);
+ }
  @PermissionCallback private void notificationResult(PluginCall call){openExact(call);}
  private void openExact(PluginCall call){if(!NotificationManagerCompat.from(getContext()).areNotificationsEnabled()){permissions(call);return;}if(Build.VERSION.SDK_INT>=31&&!AlarmScheduler.exact(getContext()))getActivity().startActivity(new Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM,Uri.parse("package:"+getContext().getPackageName())));permissions(call);}
  @PluginMethod public void speak(PluginCall call){String text=call.getString("text","");getActivity().runOnUiThread(()->{if(preview!=null)preview.shutdown();preview=new TextToSpeech(getContext(),status->{if(status==TextToSpeech.SUCCESS){preview.setLanguage(new Locale("ru","RU"));preview.speak(text,TextToSpeech.QUEUE_FLUSH,null,"preview");call.resolve();}else call.reject("TTS недоступен");});});}
