@@ -9,21 +9,40 @@ android {
         applicationId "ru.voicereminder.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 23
-        versionName "1.6.0-vosk"
+        versionCode 24
+        versionName "1.7.0-sherpa"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        ndk {
+            // sherpa-onnx поставляет готовые библиотеки под все основные ABI,
+            // поэтому приложение работает и на старых 32-битных телефонах,
+            // и на новых 64-битных. x86 оставлен для эмулятора: без него
+            // отладка на нём невозможна, а места он занимает немного.
+            abiFilters 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+        }
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
-            // Модель Vosk читается напрямую из assets, без сжатия.
-            noCompress 'mdl', 'fst', 'int', 'dubm', 'conf', 'mat'
+            // Модель распознавания читается напрямую из assets, без сжатия:
+            // иначе пришлось бы распаковывать 70 МБ при каждом запуске.
+            noCompress 'onnx', 'txt'
         }
     }
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+    // Раздельные сборки по архитектурам: телефон скачивает только свою,
+    // а не все четыре набора библиотек сразу. Для отладки на конкретном
+    // устройстве это экономит десятки мегабайт.
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'armeabi-v7a', 'arm64-v8a', 'x86', 'x86_64'
+            universalApk true
         }
     }
 }
@@ -36,7 +55,11 @@ repositories {
 
 dependencies {
     coreLibraryDesugaring "com.android.tools:desugar_jdk_libs:2.1.5"
-    implementation "com.alphacephei:vosk-android:0.3.75"
+    // Распознавание речи: sherpa-onnx. Модели подключаются из assets,
+    // интернет не нужен. Библиотека написана на Kotlin, поэтому нужен
+    // kotlin-stdlib — без него сборка падает на его классах.
+    implementation files('libs/sherpa-onnx-2.0.2.aar')
+    implementation "org.jetbrains.kotlin:kotlin-stdlib:2.0.21"
     testImplementation "org.json:json:20250517"
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"

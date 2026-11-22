@@ -169,7 +169,21 @@ function startWeb({ lang, onInterim, onEnd, onError, onStart }) {
 /**
  * Запускает одноразовое распознавание. Возвращает Promise<string>.
  * onInterim(text) — промежуточные результаты для живой расшифровки на экране.
+ *
+ * На Android используется офлайн-движок Vosk: он не обрывает запись на паузах.
+ * Если Vosk недоступен, приложение откатывается на системный распознаватель.
  */
 export async function startRecognition(opts = {}) {
-  return isNative() ? startNative(opts) : startWeb(opts);
+  if (isNative()) {
+    const { startVosk, isVoskSupported } = await import("./vosk.js");
+    if (isVoskSupported()) {
+      try {
+        return await startVosk(opts);
+      } catch (error) {
+        console.warn("Vosk недоступен, используется системный движок:", error);
+      }
+    }
+    return startNative(opts);
+  }
+  return startWeb(opts);
 }

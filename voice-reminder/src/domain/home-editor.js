@@ -1,5 +1,6 @@
 import { parseGroup } from "./groups.js";
 import { toDigits } from "./phrase-digits.js";
+import { spokenDate, stripDate } from "./dates-spoken.js";
 
 // The editor shows the complete phrase; the stored reminder keeps only its subject.
 //
@@ -21,6 +22,41 @@ export function editorPhrase(draft, now = new Date()) {
 }
 export function parseEditor(phrase, current, now = new Date()) {
   const parsed = parseGroup(phrase, current.selectedDates || [], now);
+
+  // Дату, произнесённую словами («двадцать пятого декабря», «первого
+  // сентября»), parseGroup не понимает — она уходила в текст, и
+  // напоминание срабатывало сегодня. Разбираем её отдельно и, если
+  // нашли, подставляем вместо сегодняшней даты.
+  const spoken = spokenDate(phrase, now);
+  if (spoken) {
+    const alreadySame =
+      parsed.dates && parsed.dates.length === 1 && parsed.dates[0] === spoken.date;
+    if (!alreadySame) {
+      const rest = stripDate(phrase, spoken.match).trim();
+      const withoutDate = parseGroup(rest || phrase, [], now);
+      return {
+        ...current,
+        ...withoutDate,
+        phrase: rest || withoutDate.text || parsed.text,
+        text: withoutDate.text || parsed.text,
+        dateConflict: null,
+        selectedDates: [spoken.date],
+        dates: [spoken.date],
+        schedule: {
+          ...withoutDate.schedule,
+          kind: "dates",
+          dates: [spoken.date],
+          times:
+            (withoutDate.times && withoutDate.times.length
+              ? withoutDate.times
+              : parsed.times) || [],
+        },
+        id: current.id,
+        color: current.color,
+      };
+    }
+  }
+
   return {
     ...current,
     ...parsed,

@@ -5,11 +5,13 @@ import {
   toggleEditorDate,
   sessionGate,
 } from "./domain/home-editor.js";
+import { toDigits } from "./domain/phrase-digits.js";
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { isNative } from "./lib/native.js";
 import { startContinuousDictation } from "./lib/continuous-dictation.js";
 import { finishDictation } from "./lib/finish-dictation.js";
 import { primeAudio, playRecordingCue, playDictationDoneCue } from "./lib/alerts.js";
+import { FONT_STEPS, MIN_FONT } from "./lib/fit-text.js";
 import Calendar from "./PlannerCalendar.jsx";
 import { assertDailyCapacity } from "./domain/day-capacity.js";
 import {
@@ -80,9 +82,11 @@ export default function App() {
     [email, setEmail] = useState(""),
     [key, setKey] = useState(""),
     [editing, setEditing] = useState(null),
+    [editorFont, setEditorFont] = useState(0),
     [dayFilter, setDayFilter] = useState(null);
   const recording = useRef(),
     draftRef = useRef(draft),
+    editorRef = useRef(null),
     mounted = useRef(true),
     starting = useRef(false),
     recognitionTask = useRef(null),
@@ -242,13 +246,65 @@ export default function App() {
       setCreating(false);
     }
   }, [!!alarm]);
+  // Разбор фразы стоит 1,5–4 мс, а на телефоне — в несколько раз дороже.
+  // Поэтому текст показывается сразу, а разбор выполняется с небольшой паузой.
+  const parseTimer = useRef(null);
+
+  // Подбор размера шрифта под длину фразы.
+  //
+  // Поле ввода показывает фразу целиком, и длинная фраза при крупном шрифте
+  // уезжала за границу — её приходилось прокручивать. Теперь шрифт
+  // подбирается так, чтобы текст был виден весь: короткая фраза крупно,
+  // длинная мельче. Пересчитываем при смене текста и размера экрана
+  // (поворот телефона, появление клавиатуры).
+  useEffect(() => {
+    const el = editorRef.current;
+    if (!el) return undefined;
+    const fit = () => {
+      // Проверяем по реальной вёрстке, а не по оценке: подбираем самый
+      // крупный размер, при котором scrollHeight не превышает clientHeight.
+      // Так результат совпадает с тем, что видит пользователь, при любом
+      // шрифте и любом размере экрана.
+      const previous = el.style.fontSize;
+      for (const size of FONT_STEPS) {
+        el.style.fontSize = size + "px";
+        if (el.scrollHeight <= el.clientHeight) {
+          setEditorFont(size);
+          return;
+        }
+      }
+      // Даже минимальный размер не влезает — оставляем его.
+      el.style.fontSize = MIN_FONT + "px";
+      setEditorFont(MIN_FONT);
+      void previous;
+    };
+    fit();
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(fit) : null;
+    observer?.observe(el);
+    window.addEventListener("orientationchange", fit);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("orientationchange", fit);
+    };
+  }, [live, draft.phrase, draft.text]);
+
   function typePhrase(phrase) {
-    const next = parseEditor(phrase, draftRef.current);
-    draftRef.current = next;
-    setDraft(next);
-    setLive("");
+    setLive(phrase);
     setCreating(!!phrase.trim());
     setMessage("");
+    if (parseTimer.current) clearTimeout(parseTimer.current);
+    parseTimer.current = setTimeout(() => {
+      parseTimer.current = null;
+      const next = parseEditor(phrase, draftRef.current);
+      draftRef.current = next;
+      setDraft(next);
+      // Показываем фразу цифрами: «двадцать пятого декабря в 19:30»
+      // читается и проверяется быстрее, чем «двадцать пятого декабря
+      // в половину восьмого вечера». Сырая расшифровка остаётся в
+      // originalTranscript и не теряется.
+      setLive(toDigits(phrase, next));
+    }, 140);
   }
   const pick = (date) => {
     const next = toggleEditorDate(draftRef.current, date);
@@ -493,9 +549,11 @@ export default function App() {
               </label>
               <textarea
                 id="event-text"
-                value={voiceActive && live ? live : editorPhrase(draft)}
+                ref={editorRef}
+                value={live || editorPhrase(draft)}
                 readOnly={voiceActive || busy}
                 spellCheck="true"
+                style={editorFont ? { fontSize: editorFont + "px" } : undefined}
                 placeholder="Сообщите, о чём напомнить и во сколько. Затем выберите даты на календаре и нажмите «Готово»."
                 onChange={(e) => typePhrase(e.target.value)}
               />

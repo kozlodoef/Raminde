@@ -13,6 +13,17 @@
     -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
   font-synthesis: none;
 }
+/*
+  WebView на Android сам увеличивает мелкий текст в широких блоках
+  (font boosting): заданный 26px превращался в 36px, и программа подбора
+  размера шрифта не попадала в реальность. Отключаем эту подстройку —
+  тогда пиксели в CSS означают именно пиксели, и текст занимает ровно то
+  место, которое мы посчитали.
+*/
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
 * {
   box-sizing: border-box;
 }

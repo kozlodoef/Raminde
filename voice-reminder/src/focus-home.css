@@ -86,10 +86,22 @@
   box-shadow: none;
   color: #fffaf0;
   background: transparent;
-  font:
-    500 23px/1.5 "Manrope",
-    sans-serif;
+  /* Размер шрифта выставляет App.jsx через fitFontSize: он подбирает его
+     так, чтобы вся фраза была видна без прокрутки. Здесь только запасной
+     вариант и общие параметры шрифта. */
+  font-family: "Manrope", sans-serif;
+  font-weight: 500;
+  font-size: 19px;
+  line-height: 1.4;
   overflow-wrap: anywhere;
+  /* Прокрутка остаётся только как аварийный выход: если даже минимальный
+     размер не вмещает текст, лучше дать прочитать хвост, чем обрезать его. */
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.focus-editor textarea::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 .focus-editor textarea::placeholder {
   color: #b9cbd5;

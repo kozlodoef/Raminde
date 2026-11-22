@@ -68,8 +68,18 @@ const numSource =
   "(?:\\d{1,2}(?::\\d{2})?|(?:двадцать|тридцать|сорок|пятьдесят)(?:\\s+(?:один|два|три|четыре|пять|шесть|семь|восемь|девять))?|" +
   Object.keys(numbers).join("|") +
   ")";
+// Названия частей дня, которые люди произносят вместо часа: «напомни в
+// обед». Без них время не распознавалось, «обед» попадал в текст
+// напоминания, а время оставалось пустым.
+const DAYPARTS = { обед: "13:00", полдень: "12:00", полночь: "00:00" };
+const daypartSource = Object.keys(DAYPARTS).join("|");
 const term =
-  numSource + "(?:\\s+час(?:а|ов)?)?(?:\\s+(?:утра|вечера|дня|ночи))?";
+  "(?:" +
+  daypartSource +
+  "|" +
+  numSource +
+  "(?:\\s+час(?:а|ов)?)?(?:\\s+(?:утра|вечера|дня|ночи))?" +
+  ")";
 const timeClause = new RegExp(
   "(?<!\\p{L})в\\s+(" +
     term +
@@ -80,6 +90,9 @@ const timeClause = new RegExp(
 );
 function parseTime(value) {
   value = value.toLowerCase().replaceAll("ё", "е");
+  // «в обед» / «в полдень» / «в полночь» — сразу известное время.
+  const part = value.trim().match(new RegExp("^(" + daypartSource + ")$", "u"));
+  if (part) return DAYPARTS[part[1]];
   const marker = value.match(/утра|вечера|дня|ночи/u)?.[0];
   const v = value.replace(/утра|вечера|дня|ночи|час(?:а|ов)?/gu, "").trim();
   let h,

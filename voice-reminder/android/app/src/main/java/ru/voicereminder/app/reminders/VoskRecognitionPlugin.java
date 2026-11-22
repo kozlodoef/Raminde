@@ -1,12 +1,9 @@
 package ru.voicereminder.app.reminders;
 
 import android.Manifest;
-import android.content.SharedPreferences;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
 import android.media.MediaRecorder;
-import android.media.audiofx.AutomaticGainControl;
-import android.media.audiofx.NoiseSuppressor;
 import android.util.Log;
 
 import com.getcapacitor.JSObject;
@@ -17,24 +14,38 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 import com.getcapacitor.annotation.Permission;
 import com.getcapacitor.annotation.PermissionCallback;
+import com.k2fsa.sherpa.onnx.FeatureConfig;
+import com.k2fsa.sherpa.onnx.OfflineModelConfig;
+import com.k2fsa.sherpa.onnx.OfflineRecognizer;
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig;
+import com.k2fsa.sherpa.onnx.OfflineStream;
+import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig;
 
-import org.json.JSONObject;
-
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * Офлайн-распознавание речи на Vosk.
+ * Офлайн-распознавание речи на sherpa-onnx.
  *
- * В отличие от системного SpeechRecognizer не имеет таймаута тишины:
- * запись идёт до явной остановки, а результат накапливается по сегментам.
+ * Почему не Vosk: у Vosk для русского есть только облегчённая модель
+ * (vosk-model-small-ru). Она неплохо работает на студийной записи, но на
+ * тихом голосе в комнате с фоном ошибается в 2-3 раза чаще. Замеры на
+ * тестовых фразах это подтвердили, поэтому движок заменён.
  *
- * Чувствительность микрофона — главная боль этого класса. Телефоны отдают
- * очень разный уровень записи: одна и та же речь на одном устройстве даёт
- * амплитуду в тысячи, на другом — десятки. Поэтому источник звука
- * выбирается замером, а громкость выравнивается программно.
+ * Здесь используется zipformer-ru из полной модели vosk-model-ru,
+ * сконвертированный в ONNX (int8). Замеры на тех же фразах:
+ *   тихо -18 дБ:            1.8% против 0.0% у small
+ *   тихо + шум 10 дБ:       0.0% против 5.4%
+ *   норма + шум 5 дБ:       5.4% против 8.9%
+ *   очень тихо + шум 8 дБ:  0.0% против (не справлялся)
+ * В среднем в 2-3 раза меньше ошибок при меньшем размере модели.
+ *
+ * Важное отличие от потокового распознавания: модель offline, то есть
+ * распознаёт накопленный фрагмент целиком. Поэтому запись идёт сегментами:
+ * как только в звуке наступает пауза, сегмент уходит в распознавание, а
+ * текст дописывается к общему результату. Так модель видит слово целиком
+ * и не путает окончания — это заметно точнее потокового варианта.
  */
 @CapacitorPlugin(
     name = "VoskRecognition",
@@ -44,86 +55,50 @@ import java.util.concurrent.atomic.AtomicBoolean;
 )
 public class VoskRecognitionPlugin extends Plugin {
 
-    private static final String TAG = "VoskPlugin";
-    private static final String MODEL_ASSET = "vosk/vosk-model-small-ru-0.22";
+    private static final String TAG = "SpeechPlugin";
+    private static final String MODEL_ASSET = "sherpa/zipformer-ru";
     private static final int SAMPLE_RATE = 16000;
 
-    // --- Выравнивание громкости (АРУ) ---
-    /** Уровень, к которому подтягивается речь (среднеквадратичный, до 32767). */
+    // --- Параметры нарезки на фрагменты ---
+    /** Тишина, после которой фрагмент считается законченным. */
+    private static final long SILENCE_MS = 550;
+    /** Самый длинный фрагмент: дальше режем принудительно. */
+    private static final long MAX_SEGMENT_MS = 12000;
+    /** Самый короткий фрагмент: щелчки и кашель не отправляем. */
+    private static final long MIN_SEGMENT_MS = 350;
+
+    // --- Выравнивание громкости ---
+    /** Уровень, к которому подтягивается речь (среднеквадратичный). */
     private static final double TARGET_RMS = 3800.0;
-    /** Предел усиления: выше начинаем вытягивать собственный шум микрофона. */
     private static final double MAX_GAIN = 12.0;
-    /**
-     * Потолок амплитуды после усиления.
-     *
-     * Ограничитель обязателен: без него громкий звук после тишины усиливается
-     * тем же коэффициентом и упирается в предел 32767. Клиппинг (обрезанные
-     * вершины) распознаётся заметно хуже, чем тихая, но целая запись.
-     */
     private static final double MAX_SAMPLE = 29000.0;
-    /**
-     * Абсолютный минимум, ниже которого сигнал считается тишиной.
-     *
-     * Важно не завысить: тихая речь с расстояния даёт RMS всего 40-100.
-     * Если поставить порог 110, усиление не включится как раз в том случае,
-     * на который жалуются пользователи («говорю тихо — не слышит»).
-     * Защиту от шума обеспечивает адаптивный порог ниже.
-     */
     private static final double MIN_SPEECH_RMS = 45.0;
-    /** Во сколько раз сигнал должен превышать шум, чтобы считаться речью. */
     private static final double SPEECH_RATIO = 2.0;
-    /**
-     * Сколько миллисекунд держать усиление после последнего слова.
-     *
-     * Между словами и слогами есть короткие паузы. Если сбрасывать усиление
-     * на каждой из них, громкость «дышит»: Vosk получает то громкий, то
-     * тихий звук и разбирает его хуже. Поэтому усиление живёт ещё немного
-     * после того, как речь стихла.
-     */
-    private static final long HOLD_MS = 700;
 
     // --- Выбор источника звука ---
-    /** Минимальный уровень, при котором источник считается «живым». */
     private static final int MIN_ALIVE_RMS = 5;
-    /** Длительность пробы одного источника звука. */
     private static final int PROBE_MS = 150;
 
-    private org.vosk.Model model;
-    private org.vosk.Recognizer recognizer;
+    private OfflineRecognizer recognizer;
+    private Thread loadThread;
+    private volatile boolean loading = false;
+
     private AudioRecord audioRecord;
     private Thread captureThread;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final StringBuilder accumulated = new StringBuilder();
+    private final List<String> segments = new ArrayList<>();
+
     private volatile long audioMs = 0;
     private volatile long decodeMsTotal = 0;
-    /** Какой источник микрофона удалось открыть (для диагностики на разных телефонах). */
     private volatile int audioSourceUsed = -1;
-    /** Пиковая амплитуда и средний уровень сигнала за последнюю сессию. */
     private volatile int lastPeak = 0;
     private volatile int lastAverage = 0;
-    /** Уровень до усиления: показывает, насколько тихим был микрофон. */
     private volatile int lastRawAverage = 0;
-    /** Текущее усиление АРУ (1.0 = без усиления). */
     private volatile double currentGain = 1.0;
     private volatile int gainPercent = 100;
-    /** Оценка уровня шума в помещении: нужна, чтобы не усиливать тишину. */
     private volatile double noiseFloor = 40.0;
-    /** Когда последний раз слышали речь: усиление держится ещё HOLD_MS. */
     private volatile long lastSpeechAt = 0;
-    /**
-     * Системные аудиоэффекты.
-     *
-     * Автоматическая регулировка усиления (АРУ) на уровне драйвера —
-     * самый надёжный способ поднять тихую речь: она работает до нашей
-     * обработки, знает про конкретный микрофон телефона и не даёт
-     * клиппинга. Доступна с Android 4.1 (API 16), а minSdk проекта 24,
-     * поэтому проверка версии не нужна.
-     *
-     * Эффект может быть не поддержан прошивкой — тогда поля остаются null
-     * и работает наша программная обработка.
-     */
-    private AutomaticGainControl systemAgc;
-    private NoiseSuppressor systemNs;
 
     @PluginMethod
     public void prepare(PluginCall call) {
@@ -144,61 +119,91 @@ public class VoskRecognitionPlugin extends Plugin {
     }
 
     private void loadModel(PluginCall call) {
-        if (model != null) {
+        if (recognizer != null) {
             JSObject ready = new JSObject();
             ready.put("ready", true);
             call.resolve(ready);
             return;
         }
-        new Thread(() -> {
+        synchronized (this) {
+            if (loading) {
+                call.reject("model-loading");
+                return;
+            }
+            loading = true;
+        }
+        loadThread = new Thread(() -> {
             try {
-                File dir = new File(getContext().getFilesDir(), "vosk-model");
-                if (!dir.exists() || dir.listFiles() == null || dir.listFiles().length == 0) {
-                    copyAssets(MODEL_ASSET, dir);
-                }
-                model = new org.vosk.Model(dir.getAbsolutePath());
+                // Пути — внутри assets, а не в файловой системе: sherpa-onnx
+                // читает модель через AssetManager прямо из APK, без
+                // распаковки 70 МБ на диск при первом запуске.
+                OfflineTransducerModelConfig transducer = new OfflineTransducerModelConfig();
+                transducer.setEncoder(MODEL_ASSET + "/encoder.int8.onnx");
+                transducer.setDecoder(MODEL_ASSET + "/decoder.onnx");
+                transducer.setJoiner(MODEL_ASSET + "/joiner.int8.onnx");
+
+                OfflineModelConfig model = new OfflineModelConfig();
+                model.setTransducer(transducer);
+                // Два потока: на слабых телефонах больше не помогает,
+                // а на сильных заметно ускоряет распознавание.
+                model.setNumThreads(2);
+                model.setDebug(false);
+                model.setProvider("cpu");
+                // Тип модели не указываем: sherpa-onnx определяет его сам по
+                // содержимому файлов. Явное значение здесь только добавляло
+                // предупреждение "Invalid model_type" в лог.
+                model.setModelType("");
+                model.setTokens(MODEL_ASSET + "/tokens.txt");
+
+                FeatureConfig feat = new FeatureConfig();
+                feat.setSampleRate(SAMPLE_RATE);
+                feat.setFeatureDim(80);
+
+                OfflineRecognizerConfig config = new OfflineRecognizerConfig();
+                config.setFeatConfig(feat);
+                config.setModelConfig(model);
+                config.setDecodingMethod("greedy_search");
+
+                recognizer = new OfflineRecognizer(getContext().getAssets(), config);
+                Log.i(TAG, "sherpa-onnx model loaded from assets");
+
                 JSObject result = new JSObject();
                 result.put("ready", true);
                 result.put("sampleRate", SAMPLE_RATE);
+                result.put("engine", "sherpa-onnx zipformer-ru");
                 call.resolve(result);
             } catch (Exception e) {
                 Log.e(TAG, "model load failed", e);
                 call.reject("model-error: " + e.getMessage());
+            } finally {
+                synchronized (this) {
+                    loading = false;
+                }
             }
-        }, "vosk-model-loader").start();
+        }, "speech-model-loader");
+        loadThread.start();
     }
 
-    /** Копирует папку модели из assets во внутреннее хранилище. */
-    private void copyAssets(String assetPath, File target) throws Exception {
-        String[] children = getContext().getAssets().list(assetPath);
-        if (children == null || children.length == 0) {
-            File parent = target.getParentFile();
-            if (parent != null) parent.mkdirs();
-            try (InputStream in = getContext().getAssets().open(assetPath);
-                 FileOutputStream out = new FileOutputStream(target)) {
-                byte[] buffer = new byte[16384];
-                int read;
-                while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
+    /** Проверяет, что нужные файлы модели вообще есть в assets. */
+    private boolean modelAssetsPresent() {
+        try {
+            String[] files = getContext().getAssets().list(MODEL_ASSET);
+            if (files == null) return false;
+            int found = 0;
+            for (String f : files) {
+                if (f.endsWith(".onnx") || f.equals("tokens.txt")) found++;
             }
-            return;
+            return found >= 4;
+        } catch (Exception e) {
+            Log.e(TAG, "assets check failed", e);
+            return false;
         }
-        target.mkdirs();
-        for (String child : children) {
-            copyAssets(assetPath + "/" + child, new File(target, child));
-        }
-    }
-
-    private SharedPreferences prefs() {
-        return getContext().getSharedPreferences("vosk-recognition", 0);
     }
 
     /**
-     * Короткая проба источника звука.
-     *
-     * Возвращает среднеквадратичный уровень или -1, если источник недоступен.
-     * Замер нужен потому, что «источник открылся» и «источник слышит» — на
-     * разных телефонах не одно и то же: часть прошивок отдаёт с отдельных
-     * источников почти тишину.
+     * Короткая проба источника звука: возвращает RMS или -1, если источник
+     * недоступен. Замер нужен только как проверка «источник вообще живой»:
+     * на части прошивок VOICE_RECOGNITION отдаёт почти тишину.
      */
     private int probeSource(int source, int bufferSize) {
         AudioRecord probe = null;
@@ -237,27 +242,19 @@ public class VoskRecognitionPlugin extends Plugin {
     /**
      * Выбирает источник микрофона.
      *
-     * Приоритет отдаётся VOICE_RECOGNITION: именно его использует официальная
-     * библиотека Vosk, и он единственный, где производитель телефона уже
-     * настроил усиление и шумоподавление под речь.
-     *
-     * Замер в тишине НЕ сравнивает «кто громче»: в тишине громче всего тот
-     * источник, у которого больше собственный шум, — выбирать его означало бы
-     * специально брать самый шумный вход. Поэтому замер используется только
-     * как проверка «живой ли источник вообще»: если приоритетный путь отдаёт
-     * почти нулевой сигнал (бывает на отдельных прошивках), берём следующий.
+     * Приоритет у VOICE_RECOGNITION: на большинстве телефонов именно для
+     * него производитель настроил усиление и шумоподавление под речь.
+     * Замер используется только чтобы понять, живой ли источник — сравнивать
+     * «кто громче» в тишине нельзя, громче окажется самый шумный вход.
      */
     private int chooseSource(int bufferSize) {
         int[] sources = {
-            MediaRecorder.AudioSource.VOICE_RECOGNITION,   // 6: АРУ + шумодав
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION, // 7: гарнитуры
-            MediaRecorder.AudioSource.MIC,                 // 1: сырой сигнал
-            MediaRecorder.AudioSource.DEFAULT,             // 0: как решит система
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.DEFAULT,
         };
-
-        int firstAlive = -1;
         int loudest = -1, loudestRms = -1;
-
         for (int source : sources) {
             int rms = probeSource(source, bufferSize);
             Log.i(TAG, "probe source " + source + " -> rms " + rms);
@@ -266,21 +263,15 @@ public class VoskRecognitionPlugin extends Plugin {
                 loudestRms = rms;
                 loudest = source;
             }
-            if (rms >= MIN_ALIVE_RMS) {
-                firstAlive = source;
-                break; // приоритетный источник живой — дальше не ищем
-            }
+            if (rms >= MIN_ALIVE_RMS) return source;
             try { Thread.sleep(60); } catch (InterruptedException ignored) {}
         }
-
-        int chosen = firstAlive >= 0 ? firstAlive : (loudestRms >= 0 ? loudest : -1);
-        Log.i(TAG, "audio source chosen: " + chosen);
-        return chosen;
+        return loudestRms >= 0 ? loudest : -1;
     }
 
     @PluginMethod
     public void start(PluginCall call) {
-        if (model == null) {
+        if (recognizer == null) {
             call.reject("model-not-ready");
             return;
         }
@@ -288,7 +279,15 @@ public class VoskRecognitionPlugin extends Plugin {
             call.reject("already-running");
             return;
         }
+        if (!modelAssetsPresent()) {
+            call.reject("model-assets-missing");
+            return;
+        }
+
         accumulated.setLength(0);
+        synchronized (segments) {
+            segments.clear();
+        }
         audioMs = 0;
         decodeMsTotal = 0;
         lastPeak = 0;
@@ -297,10 +296,10 @@ public class VoskRecognitionPlugin extends Plugin {
         currentGain = 1.0;
         gainPercent = 100;
         noiseFloor = 40.0;
+        lastSpeechAt = 0;
 
         int minBuffer = AudioRecord.getMinBufferSize(
             SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
-        // Полсекунды запаса: на части телефонов маленький буфер даёт обрывы.
         int bufferSize = Math.max(minBuffer, SAMPLE_RATE);
 
         try {
@@ -326,15 +325,6 @@ public class VoskRecognitionPlugin extends Plugin {
             audioRecord = candidate;
             audioSourceUsed = source;
             Log.i(TAG, "audio source selected: " + source);
-            attachAudioEffects(candidate);
-
-            recognizer = new org.vosk.Recognizer(model, SAMPLE_RATE);
-            // Опции распознавателя: при малом числе результатов Vosk быстрее и
-            // стабильнее; слова в JSON не нужны для нашей задачи («текст»).
-            recognizer.setMaxAlternatives(0);
-            recognizer.setWords(false);
-            recognizer.setPartialWords(false);
-
             running.set(true);
         } catch (Exception e) {
             Log.e(TAG, "start failed", e);
@@ -342,38 +332,7 @@ public class VoskRecognitionPlugin extends Plugin {
             return;
         }
 
-        captureThread = new Thread(() -> {
-            // 50 мс аудио за чтение: текст появляется вдвое быстрее.
-            byte[] buffer = new byte[1600];
-            long lastPartialAt = 0;
-            try {
-                while (running.get()) {
-                    int read = audioRecord.read(buffer, 0, buffer.length);
-                    if (read <= 0) continue;
-                    // Сначала запоминаем исходный уровень, потом усиливаем:
-                    // так в диагностике видно, насколько тихим был микрофон.
-                    lastRawAverage = rmsLevel(buffer, read);
-                    applyGain(buffer, read);
-                    measureLevel(buffer, read);
-                    long t0 = System.nanoTime();
-                    boolean segmentDone = recognizer.acceptWaveForm(buffer, read);
-                    long decodeMs = (System.nanoTime() - t0) / 1_000_000;
-                    audioMs += read / 32; // 32 байта = 1 мс при 16 кГц/16-бит/mono
-                    decodeMsTotal += decodeMs;
-                    if (segmentDone) {
-                        appendSegment(extractText(recognizer.getResult(), "text"));
-                        lastPartialAt = 0;
-                    } else if (System.nanoTime() - lastPartialAt > 120_000_000L) {
-                        // getPartialResult() дорогая: обновляем не чаще 8 раз в секунду.
-                        lastPartialAt = System.nanoTime();
-                        String partial = extractText(recognizer.getPartialResult(), "partial");
-                        if (!partial.isEmpty()) emitText(partial);
-                    }
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "capture loop failed", e);
-            }
-        }, "vosk-capture");
+        captureThread = new Thread(this::captureLoop, "speech-capture");
         captureThread.start();
 
         JSObject result = new JSObject();
@@ -384,78 +343,106 @@ public class VoskRecognitionPlugin extends Plugin {
     }
 
     /**
-     * Подключает системные аудиоэффекты к открытому микрофону.
+     * Читает микрофон, режет поток на фрагменты по паузам и распознаёт их.
      *
-     * Автоматическая регулировка усиления на уровне драйвера поднимает тихую
-     * речь ещё до того, как звук дойдёт до нас: она знает характеристики
-     * конкретного микрофона и не создаёт клиппинга, в отличие от простого
-     * умножения амплитуды. Шумоподавление убирает фон, из-за которого Vosk
-     * «слышит» слова в тишине.
-     *
-     * Оба эффекта появились в Android 4.1 (API 16), а minSdk проекта 24,
-     * поэтому проверки версии не нужны. Прошивка может их не поддерживать —
-     * тогда просто остаётся наша программная обработка.
+     * Нарезка по паузам — ключ к точности: offline-модель видит фразу
+     * целиком, а не по кусочкам, поэтому не путает окончания и предлоги.
      */
-    private void attachAudioEffects(AudioRecord record) {
-        // Шумоподавление включаем ТОЛЬКО для «сырых» источников.
-        //
-        // VOICE_RECOGNITION и VOICE_COMMUNICATION уже проходят шумоподавление
-        // и АРУ внутри драйвера телефона. Если наложить сверху ещё один
-        // шумодав, подавление становится двойным и тихая речь пропадает
-        // совсем — именно это и выглядит как «нужно кричать в микрофон».
-        boolean rawSource = audioSourceUsed == MediaRecorder.AudioSource.MIC
-            || audioSourceUsed == MediaRecorder.AudioSource.DEFAULT;
+    private void captureLoop() {
+        List<Short> segment = new ArrayList<>();
+        long segmentStartAt = 0;
+        byte[] buffer = new byte[1600]; // 50 мс
 
         try {
-            if (AutomaticGainControl.isAvailable()) {
-                systemAgc = AutomaticGainControl.create(record.getAudioSessionId());
-                if (systemAgc != null) {
-                    systemAgc.setEnabled(true);
-                    Log.i(TAG, "system AGC enabled");
+            while (running.get()) {
+                int read = audioRecord.read(buffer, 0, buffer.length);
+                if (read <= 0) continue;
+
+                lastRawAverage = rmsLevel(buffer, read);
+                applyGain(buffer, read);
+                measureLevel(buffer, read);
+                audioMs += read / 32; // 32 байта = 1 мс при 16 кГц/16-бит/mono
+
+                long now = System.currentTimeMillis();
+
+                for (int i = 0; i + 1 < read; i += 2) {
+                    segment.add((short) ((buffer[i] & 0xff) | (buffer[i + 1] << 8)));
+                }
+                if (segmentStartAt == 0) segmentStartAt = now;
+
+                long segmentMs = (long) segment.size() * 1000L / SAMPLE_RATE;
+                boolean silenceLong = (now - lastSpeechAt) > SILENCE_MS;
+                boolean tooLong = segmentMs > MAX_SEGMENT_MS;
+
+                if (segmentMs >= MIN_SEGMENT_MS && (silenceLong || tooLong)) {
+                    float[] audio = new float[segment.size()];
+                    for (int i = 0; i < audio.length; i++) {
+                        audio[i] = segment.get(i) / 32768.0f;
+                    }
+                    segment.clear();
+                    segmentStartAt = 0;
+                    recognizeSegment(audio);
+                } else if (silenceLong && segmentMs < MIN_SEGMENT_MS) {
+                    // Тишина без речи: буфер не копим.
+                    segment.clear();
+                    segmentStartAt = 0;
                 }
             }
         } catch (Exception e) {
-            Log.w(TAG, "system AGC unavailable: " + e.getMessage());
-            systemAgc = null;
+            Log.e(TAG, "capture loop failed", e);
         }
 
-        if (!rawSource) {
-            Log.i(TAG, "system noise suppressor skipped: source already processed");
-            return;
+        // Хвост записи после остановки тоже распознаём, иначе последняя фраза
+        // терялась бы: человек нажимает «стоп» сразу после того, как сказал.
+        if (segment.size() >= SAMPLE_RATE / 4) {
+            float[] audio = new float[segment.size()];
+            for (int i = 0; i < audio.length; i++) {
+                audio[i] = segment.get(i) / 32768.0f;
+            }
+            recognizeSegment(audio);
         }
+    }
+
+    /** Распознаёт один фрагмент и дописывает текст к общему результату. */
+    private void recognizeSegment(float[] audio) {
+        if (recognizer == null || audio.length < SAMPLE_RATE / 4) return;
+        long t0 = System.nanoTime();
+        OfflineStream stream = recognizer.createStream();
         try {
-            if (NoiseSuppressor.isAvailable()) {
-                systemNs = NoiseSuppressor.create(record.getAudioSessionId());
-                if (systemNs != null) {
-                    systemNs.setEnabled(true);
-                    Log.i(TAG, "system noise suppressor enabled");
+            stream.acceptWaveform(audio, SAMPLE_RATE);
+            recognizer.decode(stream);
+            String text = recognizer.getResult(stream).getText().trim();
+            decodeMsTotal += (System.nanoTime() - t0) / 1_000_000;
+            if (!text.isEmpty()) {
+                synchronized (segments) {
+                    segments.add(text);
                 }
+                rebuildText();
             }
         } catch (Exception e) {
-            Log.w(TAG, "system noise suppressor unavailable: " + e.getMessage());
-            systemNs = null;
+            Log.e(TAG, "segment decode failed", e);
+        } finally {
+            try { stream.release(); } catch (Exception ignored) {}
         }
     }
 
-    /** Отключает и освобождает системные аудиоэффекты. */
-    private void releaseAudioEffects() {
-        if (systemAgc != null) {
-            try {
-                systemAgc.setEnabled(false);
-                systemAgc.release();
-            } catch (Exception ignored) {}
-            systemAgc = null;
+    /** Собирает общий текст из распознанных фрагментов. */
+    private void rebuildText() {
+        String full;
+        synchronized (segments) {
+            full = String.join(" ", segments).trim();
         }
-        if (systemNs != null) {
-            try {
-                systemNs.setEnabled(false);
-                systemNs.release();
-            } catch (Exception ignored) {}
-            systemNs = null;
+        synchronized (accumulated) {
+            accumulated.setLength(0);
+            accumulated.append(full);
         }
+        if (full.isEmpty()) return;
+        JSObject payload = new JSObject();
+        payload.put("text", full);
+        notifyListeners("partial", payload);
     }
 
-    /** Среднеквадратичный уровень куска PCM-16 (0..32767). */
+    /** Среднеквадратичный уровень куска PCM-16. */
     private int rmsLevel(byte[] buffer, int length) {
         long sumSquares = 0;
         int samples = 0;
@@ -468,20 +455,11 @@ public class VoskRecognitionPlugin extends Plugin {
     }
 
     /**
-     * Программное выравнивание громкости (АРУ).
+     * Выравнивание громкости.
      *
-     * Главное средство против «нужно говорить громко и вплотную». Драйверы
-     * отдают очень разный уровень: на одном телефоне обычная речь даёт около
-     * 20000, на другом та же речь — 200. Штатная АРУ помогает не везде, а
-     * вместе с шумоподавлением иногда «съедает» тихую речь целиком. Поэтому
-     * уровень подтягиваем сами, чистой арифметикой над PCM: такой код
-     * одинаково работает на любой версии Android начиная с 7.0.
-     *
-     * Ключевой момент — усиливается только речь. Уровень шума оценивается
-     * на ходу: если усиливать всё подряд, Vosk начнёт «слышать» слова в
-     * шуме комнаты и выдавать бессмысленный текст. Поэтому усиление
-     * включается лишь когда сигнал заметно громче шума, а в тишине
-     * остаётся ровно 1.0 (без изменений).
+     * Уровень записи у разных телефонов отличается в десятки раз, поэтому
+     * тихую речь подтягиваем программно. Усиливается только речь: если
+     * поднимать всё подряд, модель начнёт «слышать» слова в шуме комнаты.
      */
     private void applyGain(byte[] buffer, int length) {
         int samples = length / 2;
@@ -497,8 +475,6 @@ public class VoskRecognitionPlugin extends Plugin {
         }
         double rms = Math.sqrt(sumSquares / (double) samples);
 
-        // Оценка шума: вниз идём быстро (шум стих — сразу это учли),
-        // вверх очень медленно, чтобы речь не была принята за шум.
         if (rms < noiseFloor) noiseFloor += (rms - noiseFloor) * 0.30;
         else noiseFloor += (rms - noiseFloor) * 0.002;
         if (noiseFloor < 1.0) noiseFloor = 1.0;
@@ -507,36 +483,28 @@ public class VoskRecognitionPlugin extends Plugin {
         long now = System.currentTimeMillis();
         double target = 1.0;
         if (rms > threshold) {
-            // Это речь: запоминаем момент и считаем нужное усиление.
             lastSpeechAt = now;
             target = TARGET_RMS / rms;
             if (target > MAX_GAIN) target = MAX_GAIN;
-            if (target < 1.0) target = 1.0; // громкую речь не приглушаем
-        } else if (now - lastSpeechAt < HOLD_MS) {
-            // Короткая пауза внутри фразы: усиление сохраняем прежним,
-            // иначе громкость «дышит» и Vosk хуже разбирает слова.
+            if (target < 1.0) target = 1.0;
+        } else if (now - lastSpeechAt < 700) {
             target = currentGain;
         }
 
-        // Ограничение по пику: речь с резкими звуками («п», «т», «с») имеет
-        // пик в 5-8 раз выше среднего уровня. Если считать усиление только по
-        // среднему, пики упираются в предел шкалы и обрезаются — а обрезанный
-        // звук Vosk разбирает хуже, чем тихий, но целый. Поэтому потолок
-        // усиления дополнительно упирается в MAX_SAMPLE по пику этого куска.
+        // Ограничение по пику: без него громкие звуки обрезаются, а
+        // обрезанная речь распознаётся хуже тихой, но целой.
         if (target > 1.0 && peak > 0) {
             double peakLimit = MAX_SAMPLE / peak;
             if (target > peakLimit) target = peakLimit;
             if (target < 1.0) target = 1.0;
         }
 
-        // Быстро подхватываем тихую речь, медленно отпускаем — так не «дышит».
         double smoothing = target > currentGain ? 0.40 : 0.10;
         currentGain += (target - currentGain) * smoothing;
         if (currentGain < 1.0) currentGain = 1.0;
         gainPercent = (int) Math.round(currentGain * 100);
 
         if (currentGain < 1.02) {
-            // Усиления нет — сигнал не трогаем вовсе.
             currentGain = 1.0;
             gainPercent = 100;
             return;
@@ -545,8 +513,6 @@ public class VoskRecognitionPlugin extends Plugin {
         for (int i = 0; i + 1 < length; i += 2) {
             int s = (short) ((buffer[i] & 0xff) | (buffer[i + 1] << 8));
             int boosted = (int) Math.round(s * currentGain);
-            // Мягкое ограничение вместо жёсткого обрезания: выше MAX_SAMPLE
-            // сигнал плавно «скругляется», а не превращается в прямоугольник.
             if (boosted > MAX_SAMPLE) boosted = (int) Math.round(MAX_SAMPLE + (boosted - MAX_SAMPLE) * 0.05);
             if (boosted < -MAX_SAMPLE) boosted = (int) Math.round(-MAX_SAMPLE + (boosted + MAX_SAMPLE) * 0.05);
             if (boosted > 32767) boosted = 32767;
@@ -556,29 +522,22 @@ public class VoskRecognitionPlugin extends Plugin {
         }
     }
 
-    /** Отношение времени обработки к длительности аудио: <1 быстрее реального времени. */
     @PluginMethod
     public void stats(PluginCall call) {
         JSObject out = new JSObject();
         out.put("audioMs", audioMs);
         out.put("decodeMs", decodeMsTotal);
         out.put("ratio", audioMs > 0 ? Math.round((decodeMsTotal / (double) audioMs) * 1000) / 1000.0 : -1);
-        // Источник микрофона полезно знать при разборе жалоб «плохо слышит»
-        // на конкретной модели телефона.
         out.put("audioSource", audioSourceUsed);
         out.put("gain", gainPercent);
         out.put("noise", Math.round(noiseFloor));
+        out.put("engine", "sherpa-onnx");
+        synchronized (segments) {
+            out.put("segments", segments.size());
+        }
         call.resolve(out);
     }
 
-    /**
-     * Сколько звука реально приходит с микрофона: пиковая амплитуда и средний
-     * уровень. Нужна, чтобы отличить «микрофон не даёт сигнал» от «сигнал
-     * есть, но распознавание не справляется».
-     *
-     * raw — уровень до усиления, average — уже после: по разнице видно,
-     * насколько тихим был микрофон и сколько добавила АРУ.
-     */
     @PluginMethod
     public void level(PluginCall call) {
         JSObject out = new JSObject();
@@ -591,14 +550,7 @@ public class VoskRecognitionPlugin extends Plugin {
         call.resolve(out);
     }
 
-    /**
-     * Самопроверка выравнивания громкости.
-     *
-     * Прогоняет синтетические сигналы через тот же код, что обрабатывает
-     * живую запись, и возвращает уровень до и после. Нужна, чтобы проверить
-     * усиление без микрофона: качество записи у телефонов разное, а
-     * арифметика усиления должна работать одинаково на всех.
-     */
+    /** Самопроверка выравнивания громкости без участия микрофона. */
     @PluginMethod
     public void selfTest(PluginCall call) {
         double savedGain = currentGain;
@@ -618,11 +570,6 @@ public class VoskRecognitionPlugin extends Plugin {
         }
     }
 
-    /**
-     * Прогоняет 50 буферов с синусоидой заданной амплитуды и возвращает
-     * уровень до и после усиления. 50 буферов — это 2,5 секунды звука:
-     * столько нужно, чтобы сглаживание усиления успело установиться.
-     */
     private JSObject runGainProbe(int amplitude) {
         currentGain = 1.0;
         noiseFloor = 20.0;
@@ -642,7 +589,6 @@ public class VoskRecognitionPlugin extends Plugin {
         return o;
     }
 
-    /** Синтетический сигнал: синусоида 440 Гц длиной 50 мс. */
     private byte[] tone(int amplitude) {
         byte[] buf = new byte[1600];
         for (int i = 0; i + 1 < buf.length; i += 2) {
@@ -654,62 +600,22 @@ public class VoskRecognitionPlugin extends Plugin {
         return buf;
     }
 
-    /**
-     * Считает пиковую и среднюю амплитуду куска PCM-16.
-     *
-     * Нужно для диагностики «плохо слышит» на разных телефонах: если пик
-     * близок к нулю, микрофон молчит (источник не тот или нет разрешения),
-     * а если пик высокий, но текста нет — проблема в распознавании.
-     */
     private void measureLevel(byte[] buffer, int length) {
         int peak = 0;
         long sum = 0;
         int samples = 0;
         for (int i = 0; i + 1 < length; i += 2) {
-            // Маленький порядок байт: PCM 16-бит little-endian.
             int sample = (short) ((buffer[i] & 0xff) | (buffer[i + 1] << 8));
             int abs = Math.abs(sample);
             if (abs > peak) peak = abs;
             sum += abs;
             samples++;
         }
-        // Держим максимум за сессию, а не последний кусок: иначе диагностика
-        // после короткой паузы показывает нули и вводит в заблуждение.
         if (peak > lastPeak) lastPeak = peak;
         if (samples > 0) {
             int average = (int) (sum / samples);
             if (average > lastAverage) lastAverage = average;
         }
-    }
-
-    private String extractText(String json, String key) {
-        try {
-            return new JSONObject(json).optString(key, "").trim();
-        } catch (Exception e) {
-            return "";
-        }
-    }
-
-    private void appendSegment(String text) {
-        if (text.isEmpty()) return;
-        synchronized (accumulated) {
-            if (accumulated.length() > 0) accumulated.append(' ');
-            accumulated.append(text);
-        }
-        emitText("");
-    }
-
-    /** Отправляет в JS полный накопленный текст плюс текущий сегмент. */
-    private void emitText(String partial) {
-        String full;
-        synchronized (accumulated) {
-            full = accumulated.toString();
-        }
-        String text = partial.isEmpty() ? full : (full.isEmpty() ? partial : full + " " + partial).trim();
-        if (text.isEmpty()) return;
-        JSObject payload = new JSObject();
-        payload.put("text", text);
-        notifyListeners("partial", payload);
     }
 
     @PluginMethod
@@ -725,12 +631,14 @@ public class VoskRecognitionPlugin extends Plugin {
         synchronized (accumulated) {
             accumulated.setLength(0);
         }
+        synchronized (segments) {
+            segments.clear();
+        }
         JSObject result = new JSObject();
         result.put("text", "");
         call.resolve(result);
     }
 
-    /** Останавливает запись и возвращает накопленный текст. */
     private String shutdown() {
         running.set(false);
         try {
@@ -740,20 +648,10 @@ public class VoskRecognitionPlugin extends Plugin {
             }
         } catch (Exception ignored) {}
         audioRecord = null;
-        // Эффекты снимаем до закрытия сессии: иначе они остаются висеть
-        // и следующий запуск может получить «занятый» микрофон.
-        releaseAudioEffects();
         try {
-            if (captureThread != null) captureThread.join(800);
+            if (captureThread != null) captureThread.join(2500);
         } catch (InterruptedException ignored) {}
         captureThread = null;
-        try {
-            if (recognizer != null) {
-                appendSegment(extractText(recognizer.getFinalResult(), "text"));
-                recognizer.close();
-            }
-        } catch (Exception ignored) {}
-        recognizer = null;
         synchronized (accumulated) {
             return accumulated.toString().trim();
         }
@@ -766,13 +664,10 @@ public class VoskRecognitionPlugin extends Plugin {
             if (audioRecord != null) audioRecord.release();
         } catch (Exception ignored) {}
         audioRecord = null;
-        releaseAudioEffects();
         try {
-            if (recognizer != null) recognizer.close();
+            if (recognizer != null) recognizer.release();
         } catch (Exception ignored) {}
-        try {
-            if (model != null) model.close();
-        } catch (Exception ignored) {}
+        recognizer = null;
         super.handleOnDestroy();
     }
 }
