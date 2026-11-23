@@ -21,6 +21,8 @@ export const defaults = {
   screenAck: false,
   keywords: "хорошо,понял,поняла,слышу",
   sound: true,
+  // Вид сигнала перед напоминанием: alarm, beep, bell или chime.
+  cue: "alarm",
   vibration: true,
   privateNotification: false,
   rate: 0.95,
@@ -222,6 +224,18 @@ export async function requestFullscreen() {
 export async function requestBattery() {
   if (isNative()) return Native.requestBattery();
   return { opened: true };
+}
+/**
+ * Открывает экран автозапуска прошивки.
+ *
+ * На MIUI и EMUI без разрешённого автозапуска система не отдаёт приложению
+ * трансляцию о загрузке и блокирует фоновые задания — тогда после
+ * перезагрузки телефона напоминания не восстанавливаются. Экономия батареи
+ * на это не влияет, нужен именно автозапуск.
+ */
+export async function requestAutostart() {
+  if (isNative()) return Native.requestAutostart();
+  return { opened: false, hint: "Автозапуск настраивается только на телефоне." };
 }
 export async function speakName(text) {
   if (isNative()) return Native.speak({ text });

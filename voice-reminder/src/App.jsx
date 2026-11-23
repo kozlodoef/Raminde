@@ -11,6 +11,7 @@ import { isNative } from "./lib/native.js";
 import { startContinuousDictation } from "./lib/continuous-dictation.js";
 import { finishDictation } from "./lib/finish-dictation.js";
 import { primeAudio, playRecordingCue, playDictationDoneCue } from "./lib/alerts.js";
+import { ALERT_CUES, previewCue } from "./lib/alert-cues.js";
 import { FONT_STEPS, MIN_FONT } from "./lib/fit-text.js";
 import Calendar from "./PlannerCalendar.jsx";
 import { assertDailyCapacity } from "./domain/day-capacity.js";
@@ -27,6 +28,7 @@ import {
   requestPermissions,
   requestFullscreen,
   requestBattery,
+  requestAutostart,
   speakName,
 } from "./domain/repository.js";
 import {
@@ -205,13 +207,19 @@ export default function App() {
         const parsed = parseEditor(text, draftRef.current);
         draftRef.current = parsed;
         setDraft(parsed);
-        setLive(text);
+        // Показываем расшифровку цифрами: дату и время человек проверяет
+        // глазами, и «25.12 в 19:30» проверяется быстрее, чем словами.
+        setLive(toDigits(text, parsed));
       };
       const session = startContinuousDictation({
         restartOnEnd: !isNative(),
         onStart: () => valid() && setVoice("listening"),
         onWaiting: () => valid() && setVoice("listening"),
-        onInterim: (text) => valid() && setLive(text),
+        // Промежуточная расшифровка тоже цифрами: иначе во время речи
+        // мелькали слова, а в конце текст менялся на цифры — выглядело как
+        // «подмена». Разбор ещё не готов, поэтому передаём пустой объект.
+        onInterim: (text) =>
+          valid() && setLive(toDigits(text, draftRef.current || {})),
         onFinal: applyTranscript,
       });
       recording.current = session;
@@ -753,6 +761,31 @@ export default function App() {
                 value={settings.sound}
                 onChange={(v) => setting({ sound: v })}
               />
+              {settings.sound && (
+                <label className="field">
+                  Сигнал перед напоминанием
+                  <select
+                    value={settings.cue || "alarm"}
+                    onChange={(e) => {
+                      setting({ cue: e.target.value });
+                      previewCue(e.target.value);
+                    }}
+                  >
+                    {ALERT_CUES.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="secondary cue-preview"
+                    onClick={() => previewCue(settings.cue || "alarm")}
+                  >
+                    Прослушать
+                  </button>
+                </label>
+              )}
               <Toggle
                 label="Вибрация"
                 value={settings.vibration}
@@ -900,6 +933,24 @@ export default function App() {
                   }
                 >
                   Отключить экономию батареи
+                </button>
+              )}
+              {isNative() && (
+                <button
+                  className="text-button full"
+                  onClick={() =>
+                    requestAutostart()
+                      .then((r) =>
+                        setMessage(
+                          r?.opened
+                            ? "Разрешите автозапуск для этого приложения — иначе напоминания не восстановятся после перезагрузки телефона."
+                            : r?.hint || "Разрешите автозапуск в настройках приложения.",
+                        ),
+                      )
+                      .catch((e) => setMessage(e.message))
+                  }
+                >
+                  Разрешить автозапуск (для работы после перезагрузки)
                 </button>
               )}
               <button

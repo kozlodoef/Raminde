@@ -37,15 +37,39 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
         <receiver android:name=".reminders.AlarmReceiver" android:exported="false" />
-        <receiver android:name=".reminders.RestoreReceiver" android:exported="true">
+        <receiver android:name=".reminders.RestoreReceiver" android:exported="true">>
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.TIME_SET" />
                 <action android:name="android.intent.action.TIMEZONE_CHANGED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
                 <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+                <!--
+                  Прошивки производителей вместо стандартного BOOT_COMPLETED
+                  иногда шлют собственные трансляции. У Xiaomi (MIUI) и
+                  Huawei (EMUI) это приводит к тому, что напоминания после
+                  перезагрузки не восстанавливаются. Слушаем их заодно:
+                  неизвестное действие система просто не пришлёт, вреда нет.
+                -->
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.miui.intent.action.BOOT_COMPLETED" />
+                <action android:name="com.huawei.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.ACTION_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
             </intent-filter>
         </receiver>
+
+        <!--
+          Периодическая проверка расписания. Нужна на случай, когда система
+          не прислала трансляцию о загрузке: приложение, давно не открывавшееся,
+          попадает в ограниченную категорию, и BOOT_COMPLETED отбрасывается.
+          Задание возвращает напоминания в строй без участия человека.
+        -->
+        <service
+            android:name=".reminders.RestoreJobService"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
         <service android:name=".reminders.DeliveryService" android:exported="false" android:foregroundServiceType="mediaPlayback" />
     </application>
 

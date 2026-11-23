@@ -372,6 +372,12 @@ h1 span {
   border: 0;
   font-weight: 600;
 }
+/* Кнопка прослушивания сигнала: стоит под списком выбора, поэтому
+   отделена отступом и не растягивается на всю ширину формы. */
+.cue-preview {
+  margin-top: 10px;
+  align-self: flex-start;
+}
 .primary {
   background: var(--blue);
   color: white;

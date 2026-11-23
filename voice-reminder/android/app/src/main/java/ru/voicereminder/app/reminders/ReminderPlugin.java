@@ -8,7 +8,7 @@ public class ReminderPlugin extends Plugin {
  @Override protected void handleOnResume(){AlarmScheduler.restore(getContext());}
  @PluginMethod public void getBillingCredential(PluginCall call){try{call.resolve(new JSObject().put("token",SecretVault.get(getContext())));}catch(Exception e){call.reject("Не удалось прочитать ключ восстановления");}}
  @PluginMethod public void setBillingCredential(PluginCall call){try{SecretVault.set(getContext(),call.getString("token",""));call.resolve();}catch(Exception e){call.reject("Не удалось сохранить ключ восстановления");}}
- @PluginMethod public void getState(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
+ @PluginMethod public void getState(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){AlarmScheduler.restore(getContext(),"app_open");call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
  @PluginMethod public void settings(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){JSObject s=call.getObject("settings");if(s==null){call.reject("Нет настроек");return;}db.meta("settings",s);call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
  @PluginMethod public void upsert(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){JSObject r=call.getObject("reminder");if(r==null||r.optString("id").isEmpty()||r.optString("text").trim().isEmpty())throw new IllegalArgumentException("Добавьте текст напоминания");String id=r.getString("id");JSONObject previous=db.rule(id);long next=ScheduleEngine.next(r.getJSONObject("schedule"),System.currentTimeMillis());if(r.optBoolean("enabled",true)&&next<=0)throw new IllegalArgumentException("Нет будущих дат");if(r.optBoolean("enabled",true)&&!AlarmScheduler.exact(getContext()))throw new IllegalArgumentException("Разрешите точные будильники");if(r.optBoolean("enabled",true)&&!NotificationManagerCompat.from(getContext()).areNotificationsEnabled())throw new IllegalArgumentException("Разрешите уведомления в Android");JSONObject q=db.quota();boolean fresh=previous==null;JSONObject access=db.access();if((fresh||r.optBoolean("enabled",true))&&access.optLong("trialEndsAt",0)<=System.currentTimeMillis()&&call.getString("reservation")==null){call.reject("SUBSCRIPTION");return;}
  db.getWritableDatabase().beginTransaction();try{AlarmScheduler.plan(getContext(),db,r);if(fresh){q.put("used",q.optInt("used")+1);db.meta("quota",q);}db.getWritableDatabase().setTransactionSuccessful();}finally{db.getWritableDatabase().endTransaction();}call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
@@ -74,8 +74,54 @@ public class ReminderPlugin extends Plugin {
   JSObject r=new JSObject();r.put("opened",true);call.resolve(r);
  }
 
- @PluginMethod public void requestFullscreen(PluginCall call){
-  if(Build.VERSION.SDK_INT<34||fullscreenAllowed()){JSObject ok=new JSObject();ok.put("granted",true);call.resolve(ok);return;}
+ /**
+  * Открывает экран автозапуска прошивки.
+  *
+  * Зачем это отдельно от экономии батареи. У Xiaomi (MIUI), Huawei (EMUI) и
+  * некоторых других прошивок есть собственный «автозапуск»: без него система
+  * не отдаёт приложению трансляцию о загрузке и блокирует фоновые задания
+  * (в журнале видно «Reject service»). Экономия батареи на это не влияет —
+  * нужен именно автозапуск. Здесь пробуем известные экраны прошивок по
+  * очереди; если ни один не открылся, показываем сведения о приложении,
+  * откуда до нужного переключателя два нажатия.
+  */
+ @PluginMethod public void requestAutostart(PluginCall call){
+  String[][] screens={
+   {"com.miui.securitycenter","com.miui.permcenter.autostart.AutoStartManagementActivity"},
+   {"com.huawei.systemmanager","com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"},
+   {"com.huawei.systemmanager","com.huawei.systemmanager.optimize.process.ProtectActivity"},
+   {"com.coloros.safecenter","com.coloros.safecenter.startupapp.StartupAppListActivity"},
+   {"com.oppo.safe","com.oppo.safe.permission.startup.StartupAppListActivity"},
+   {"com.vivo.permissionmanager","com.vivo.permissionmanager.activity.BgStartUpManagerActivity"},
+   {"com.letv.android.letvsafe","com.letv.android.letvsafe.AutobootManageActivity"},
+   {"com.asus.mobilemanager","com.asus.mobilemanager.autostart.AutoStartActivity"},
+   {"com.samsung.android.lool","com.samsung.android.sm.ui.battery.BatteryActivity"},
+   {"com.miui.securitycenter","com.miui.powercenter.PowerSettings"}
+  };
+  for(String[] s:screens){
+   try{
+    Intent i=new Intent();
+    i.setComponent(new android.content.ComponentName(s[0],s[1]));
+    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+    if(getContext().getPackageManager().resolveActivity(i,0)!=null){
+     getContext().startActivity(i);
+     JSObject r=new JSObject();r.put("opened",true);r.put("vendor",s[0]);call.resolve(r);return;
+    }
+   }catch(Exception ignored){}
+  }
+  // Ни один экран не найден — открываем сведения о приложении.
+  try{
+   Intent i=new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+     Uri.parse("package:"+getContext().getPackageName()));
+   i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+   getContext().startActivity(i);
+  }catch(Exception ignored){}
+  JSObject r=new JSObject();r.put("opened",false);
+  r.put("hint","Откройте «Автозапуск» в настройках приложения и разрешите его");
+  call.resolve(r);
+ }
+
+ @PluginMethod public void requestFullscreen(PluginCall call){  if(Build.VERSION.SDK_INT<34||fullscreenAllowed()){JSObject ok=new JSObject();ok.put("granted",true);call.resolve(ok);return;}
   try{
    Intent i=new Intent(android.provider.Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,Uri.parse("package:"+getContext().getPackageName()));
    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);

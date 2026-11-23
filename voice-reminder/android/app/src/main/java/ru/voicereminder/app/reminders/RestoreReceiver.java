@@ -19,11 +19,23 @@ public final class RestoreReceiver extends BroadcastReceiver {
         "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED";
 
     public static boolean accepts(String action) {
-        return Intent.ACTION_BOOT_COMPLETED.equals(action)
+        if (action == null) return false;
+        if (Intent.ACTION_BOOT_COMPLETED.equals(action)
             || Intent.ACTION_MY_PACKAGE_REPLACED.equals(action)
             || Intent.ACTION_TIME_CHANGED.equals(action)
             || Intent.ACTION_TIMEZONE_CHANGED.equals(action)
-            || ACTION_EXACT_ALARM_PERMISSION_CHANGED.equals(action);
+            || ACTION_EXACT_ALARM_PERMISSION_CHANGED.equals(action)) {
+            return true;
+        }
+        // Собственные трансляции прошивок о загрузке. У Xiaomi и Huawei
+        // стандартный BOOT_COMPLETED иногда не доходит до приложения, и
+        // тогда напоминания после перезагрузки не вставали. Сравниваем по
+        // строке: на любой версии Android это безопасно.
+        return action.endsWith("QUICKBOOT_POWERON")
+            || action.equals("com.miui.intent.action.BOOT_COMPLETED")
+            || action.equals("com.huawei.intent.action.BOOT_COMPLETED")
+            || action.equals("android.intent.action.ACTION_BOOT_COMPLETED")
+            || action.equals(Intent.ACTION_LOCKED_BOOT_COMPLETED);
     }
     @Override public void onReceive(Context context, Intent intent) {
         final String action = intent.getAction();

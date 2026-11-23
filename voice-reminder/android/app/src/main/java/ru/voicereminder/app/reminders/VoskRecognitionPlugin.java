@@ -69,11 +69,20 @@ public class VoskRecognitionPlugin extends Plugin {
 
     // --- Выравнивание громкости ---
     /** Уровень, к которому подтягивается речь (среднеквадратичный). */
-    private static final double TARGET_RMS = 3800.0;
-    private static final double MAX_GAIN = 12.0;
+    private static final double TARGET_RMS = 3400.0;
+    private static final double MAX_GAIN = 20.0;
     private static final double MAX_SAMPLE = 29000.0;
-    private static final double MIN_SPEECH_RMS = 45.0;
-    private static final double SPEECH_RATIO = 2.0;
+    private static final double MIN_SPEECH_RMS = 22.0;
+    private static final double SPEECH_RATIO = 1.8;
+    /**
+     * Порог «в этом куске есть голос» — для нарезки, а не для усиления.
+     * Он ниже, чем порог усиления: шёпот тише обычной речи в разы, и с
+     * высоким порогом он вообще не считался речью. Раньше из-за этого
+     * шёпот не успевал накопиться: буфер очищался каждые 300 мс как
+     * «тишина», и в распознавание уходила пустота.
+     */
+    private static final double SPEECH_GATE_MIN = 9.0;
+    private static final double SPEECH_GATE_RATIO = 1.3;
 
     // --- Выбор источника звука ---
     private static final int MIN_ALIVE_RMS = 5;
@@ -351,6 +360,9 @@ public class VoskRecognitionPlugin extends Plugin {
     private void captureLoop() {
         List<Short> segment = new ArrayList<>();
         long segmentStartAt = 0;
+        // Был ли в буфере голос с момента его начала. По нему решаем,
+        // копить фрагмент дальше или отдать в распознавание.
+        boolean hasVoice = false;
         byte[] buffer = new byte[1600]; // 50 мс
 
         try {
@@ -365,6 +377,11 @@ public class VoskRecognitionPlugin extends Plugin {
 
                 long now = System.currentTimeMillis();
 
+                // Голос ли это. Считаем после усиления: усиленный уровень
+                // точнее показывает, что человек говорит, а не фонит холодильник.
+                boolean voiceHere = lastRawAverage > 9 || lastAverage > 40;
+                if (voiceHere) hasVoice = true;
+
                 for (int i = 0; i + 1 < read; i += 2) {
                     segment.add((short) ((buffer[i] & 0xff) | (buffer[i + 1] << 8)));
                 }
@@ -375,17 +392,19 @@ public class VoskRecognitionPlugin extends Plugin {
                 boolean tooLong = segmentMs > MAX_SEGMENT_MS;
 
                 if (segmentMs >= MIN_SEGMENT_MS && (silenceLong || tooLong)) {
-                    float[] audio = new float[segment.size()];
-                    for (int i = 0; i < audio.length; i++) {
-                        audio[i] = segment.get(i) / 32768.0f;
+                    // Отдаём фрагмент, только если в нём был голос. Пустые
+                    // (чистая тишина) выбрасываем: их распознавание жрёт
+                    // батарею и подсовывает модели шум.
+                    if (hasVoice) {
+                        float[] audio = new float[segment.size()];
+                        for (int i = 0; i < audio.length; i++) {
+                            audio[i] = segment.get(i) / 32768.0f;
+                        }
+                        recognizeSegment(audio);
                     }
                     segment.clear();
                     segmentStartAt = 0;
-                    recognizeSegment(audio);
-                } else if (silenceLong && segmentMs < MIN_SEGMENT_MS) {
-                    // Тишина без речи: буфер не копим.
-                    segment.clear();
-                    segmentStartAt = 0;
+                    hasVoice = false;
                 }
             }
         } catch (Exception e) {
@@ -489,6 +508,13 @@ public class VoskRecognitionPlugin extends Plugin {
             if (target < 1.0) target = 1.0;
         } else if (now - lastSpeechAt < 700) {
             target = currentGain;
+        } else if (rms > Math.max(SPEECH_GATE_MIN, noiseFloor * SPEECH_GATE_RATIO)) {
+            // Шёпот: тише обычной речи, но заметно громче фона. Усиливаем его
+            // отдельным, более низким порогом — иначе он не дотягивал до
+            // порога обычной речи и уходил в распознавание тихим.
+            lastSpeechAt = now;
+            target = TARGET_RMS / rms;
+            if (target > MAX_GAIN) target = MAX_GAIN;
         }
 
         // Ограничение по пику: без него громкие звуки обрезаются, а
