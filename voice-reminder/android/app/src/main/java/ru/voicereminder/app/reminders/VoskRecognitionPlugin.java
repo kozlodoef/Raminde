@@ -69,20 +69,43 @@ public class VoskRecognitionPlugin extends Plugin {
 
     // --- Выравнивание громкости ---
     /** Уровень, к которому подтягивается речь (среднеквадратичный). */
-    private static final double TARGET_RMS = 3400.0;
-    private static final double MAX_GAIN = 20.0;
-    private static final double MAX_SAMPLE = 29000.0;
-    private static final double MIN_SPEECH_RMS = 22.0;
-    private static final double SPEECH_RATIO = 1.8;
+    private static final double TARGET_RMS = 3600.0;
     /**
-     * Порог «в этом куске есть голос» — для нарезки, а не для усиления.
-     * Он ниже, чем порог усиления: шёпот тише обычной речи в разы, и с
-     * высоким порогом он вообще не считался речью. Раньше из-за этого
-     * шёпот не успевал накопиться: буфер очищался каждые 300 мс как
-     * «тишина», и в распознавание уходила пустота.
+     * Предел усиления.
+     *
+     * Ограничение намеренно скромное. При большом пределе усиливается не
+     * только шёпот, но и фоновый шум: гул холодильника или вентилятора
+     * подтягивался до уровня речи, и модель начинала «слышать» в нём слова —
+     * в расшифровке появлялись несуществующие звуки. Лучше распознать шёпот
+     * чуть тише, чем получить выдуманный текст.
      */
-    private static final double SPEECH_GATE_MIN = 9.0;
-    private static final double SPEECH_GATE_RATIO = 1.3;
+    private static final double MAX_GAIN = 14.0;
+    private static final double MAX_SAMPLE = 29000.0;
+    /**
+     * Порог обычной речи: ниже него усиление не включается.
+     *
+     * Значение подобрано по замерам на телефоне: тихая речь даёт 200–400,
+     * шёпот 60–120, фон в тихой комнате 2–10, в шумной 20–40. Порог 45
+     * пропускает речь и шёпот, но не пропускает фон.
+     */
+    private static final double MIN_SPEECH_RMS = 45.0;
+    /** Во сколько раз речь должна превышать фон, чтобы считаться речью. */
+    private static final double SPEECH_RATIO = 2.5;
+    /**
+     * Средний уровень фрагмента, ниже которого он считается тишиной и не
+     * распознаётся вовсе. Фрагмент набирается по кусочкам, и один короткий
+     * всплеск мог открыть накопление — но если в остальном там тишина,
+     * модель выдаст на ней выдуманный текст.
+     */
+    private static final double MIN_SEGMENT_RMS = 60.0;
+    /**
+     * Порог шёпота: он тише обычной речи, поэтому проверяется отдельно и
+     * по более низкой границе. Но граница эта всё равно отсчитывается от
+     * фона, а не берётся абсолютной: в шумной комнате фон сам по себе
+     * громкий, и абсолютный порог пропускал бы его как речь.
+     */
+    private static final double WHISPER_GATE_MIN = 18.0;
+    private static final double WHISPER_GATE_RATIO = 2.0;
 
     // --- Выбор источника звука ---
     private static final int MIN_ALIVE_RMS = 5;
@@ -377,9 +400,16 @@ public class VoskRecognitionPlugin extends Plugin {
 
                 long now = System.currentTimeMillis();
 
-                // Голос ли это. Считаем после усиления: усиленный уровень
-                // точнее показывает, что человек говорит, а не фонит холодильник.
-                boolean voiceHere = lastRawAverage > 9 || lastAverage > 40;
+                // Был ли в этом куске голос.
+                //
+                // Раньше здесь стоял абсолютный порог 9, и любой комнатный фон
+                // (гул техники, шорох, улица — обычно 10–30) считался голосом.
+                // Такой фрагмент уходил в модель, и она «находила» в шуме слова:
+                // в расшифровке появлялись несуществующие звуки. Теперь голос
+                // определяется по превышению над измеренным фоном, поэтому фон
+                // сам себя не выдаёт за речь.
+                double voiceGate = Math.max(WHISPER_GATE_MIN, noiseFloor * WHISPER_GATE_RATIO);
+                boolean voiceHere = lastRawAverage > voiceGate;
                 if (voiceHere) hasVoice = true;
 
                 for (int i = 0; i + 1 < read; i += 2) {
@@ -425,6 +455,16 @@ public class VoskRecognitionPlugin extends Plugin {
     /** Распознаёт один фрагмент и дописывает текст к общему результату. */
     private void recognizeSegment(float[] audio) {
         if (recognizer == null || audio.length < SAMPLE_RATE / 4) return;
+
+        // Проверяем, что во фрагменте действительно была речь.
+        //
+        // Это последний рубеж: даже если шум прошёл отбор, громкость по всему
+        // фрагменту должна быть речевой. Фрагмент собирается по кусочкам, и
+        // порог внутри цикла мог сработать на одном коротком всплеске, а в
+        // остальном там тишина. Распознавать такую тишину бессмысленно: модель
+        // всё равно выдаст что-нибудь, и это «что-нибудь» попадёт в текст.
+        if (segmentRms(audio) < MIN_SEGMENT_RMS) return;
+
         long t0 = System.nanoTime();
         OfflineStream stream = recognizer.createStream();
         try {
@@ -432,7 +472,7 @@ public class VoskRecognitionPlugin extends Plugin {
             recognizer.decode(stream);
             String text = recognizer.getResult(stream).getText().trim();
             decodeMsTotal += (System.nanoTime() - t0) / 1_000_000;
-            if (!text.isEmpty()) {
+            if (!text.isEmpty() && isPlausible(text)) {
                 synchronized (segments) {
                     segments.add(text);
                 }
@@ -443,6 +483,33 @@ public class VoskRecognitionPlugin extends Plugin {
         } finally {
             try { stream.release(); } catch (Exception ignored) {}
         }
+    }
+
+    /** Среднеквадратичный уровень фрагмента по всей длине. */
+    private double segmentRms(float[] audio) {
+        if (audio == null || audio.length == 0) return 0;
+        double sum = 0;
+        for (float v : audio) sum += (double) v * v;
+        // Приводим к той же шкале, что и остальные пороги (0..32768).
+        return Math.sqrt(sum / audio.length) * 32768.0;
+    }
+
+    /**
+     * Похоже ли распознанное на настоящую фразу.
+     *
+     * Модель на шуме выдаёт короткие обрывки из одной-двух «слов» невпопад:
+     * «и», «на», «о». Настоящая фраза напоминания всегда длиннее и содержит
+     * слово подлиннее предлога. Отсекаем заведомый мусор, чтобы он не лез в
+     * поле ввода.
+     */
+    private boolean isPlausible(String text) {
+        String[] words = text.split("\\s+");
+        int real = 0;
+        for (String w : words) {
+            String clean = w.replaceAll("[^\\p{L}]", "");
+            if (clean.length() >= 3) real++;
+        }
+        return real > 0;
     }
 
     /** Собирает общий текст из распознанных фрагментов. */
@@ -508,10 +575,11 @@ public class VoskRecognitionPlugin extends Plugin {
             if (target < 1.0) target = 1.0;
         } else if (now - lastSpeechAt < 700) {
             target = currentGain;
-        } else if (rms > Math.max(SPEECH_GATE_MIN, noiseFloor * SPEECH_GATE_RATIO)) {
-            // Шёпот: тише обычной речи, но заметно громче фона. Усиливаем его
-            // отдельным, более низким порогом — иначе он не дотягивал до
-            // порога обычной речи и уходил в распознавание тихим.
+        } else if (rms > Math.max(WHISPER_GATE_MIN, noiseFloor * WHISPER_GATE_RATIO)) {
+            // Шёпот: тише обычной речи, поэтому проверяется отдельной, более
+            // низкой границей. Граница отсчитывается от измеренного фона, а
+            // не берётся абсолютной — иначе в шумной комнате гул проходил бы
+            // как шёпот и усиливался до уровня речи.
             lastSpeechAt = now;
             target = TARGET_RMS / rms;
             if (target > MAX_GAIN) target = MAX_GAIN;
