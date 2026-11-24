@@ -78,7 +78,11 @@ const term =
   daypartSource +
   "|" +
   numSource +
-  "(?:\\s+час(?:а|ов)?)?(?:\\s+(?:утра|вечера|дня|ночи))?" +
+  "(?:\\s+час(?:а|ов)?)?" +
+  "(?:\\s+" +
+  numSource +
+  "\\s+минут[а-яё]*)?" +
+  "(?:\\s+(?:утра|вечера|дня|ночи))?" +
   ")";
 const timeClause = new RegExp(
   "(?<!\\p{L})в\\s+(" +
@@ -88,6 +92,28 @@ const timeClause = new RegExp(
     ")*)(?!\\p{L}|\\d)",
   "giu",
 );
+// Время часто называют без предлога: «восемнадцать часов полить цветы».
+// Раньше такое время не находилось, слово «часов» попадало в текст, а
+// напоминание переспрашивало «Во сколько?».
+//
+// Берём только оборот с явным словом «час»: без него под правило попадали бы
+// любые числа («купить 2 хлеба» превратилось бы в напоминание на 02:00).
+const hourClause = new RegExp(
+  "(?<!\\p{L})(" +
+    numSource +
+    "\\s+час(?:а|ов)?" +
+    "(?:\\s+" +
+    numSource +
+    "\\s+минут[а-яё]*)?" +
+    "(?:\\s+(?:утра|вечера|дня|ночи))?" +
+    ")(?!\\p{L}|\\d)",
+  "giu",
+);
+// «через два часа» и «каждые два часа» — это не время суток, а отсчёт или
+// повтор. Их разбирает parseIntent, поэтому здесь такие обороты пропускаем.
+// Окончание задаём явным классом: \w в JavaScript не включает кириллицу,
+// и «кажд\w*» не поймало бы «каждые».
+const countingBefore = /(?:через|кажд[а-яё]*|раз\s+в)\s*$/iu;
 /**
  * Убирает из фразы названную словами дату.
  *
@@ -177,11 +203,30 @@ function parseTime(value) {
   const part = value.trim().match(new RegExp("^(" + daypartSource + ")$", "u"));
   if (part) return DAYPARTS[part[1]];
   const marker = value.match(/утра|вечера|дня|ночи/u)?.[0];
+  // Минуты: «девятнадцать часов тридцать минут», «18 часов 30 минут».
+  // Отрезаем их до разбора часа, иначе они попали бы в сумму и дали не то
+  // время — «19 часов 30 минут» превращалось бы в 49:00.
+  let minutes = 0;
+  const minutePart = value.match(
+    new RegExp(
+      "(\\d{1,2}|" + Object.keys(numbers).join("|") + ")\\s*минут[а-яё]*",
+      "iu",
+    ),
+  );
+  if (minutePart) {
+    const raw = minutePart[1];
+    minutes = /^\d+$/.test(raw)
+      ? Number(raw)
+      : raw.split(/\s+/).reduce((a, w) => a + (numbers[w] ?? NaN), 0);
+    value = value.replace(minutePart[0], " ");
+  }
   const v = value.replace(/утра|вечера|дня|ночи|час(?:а|ов)?/gu, "").trim();
   let h,
-    m = 0;
+    m = minutes;
   if (/^\d/.test(v)) {
-    [h, m = 0] = v.split(":").map(Number);
+    // «18:30» — минуты уже в записи через двоеточие, отдельные не нужны.
+    if (v.includes(":")) [h, m = 0] = v.split(":").map(Number);
+    else h = Number(v.split(/\s+/)[0]);
   } else h = v.split(/\s+/).reduce((a, w) => a + (numbers[w] ?? NaN), 0);
   if ((marker === "вечера" || marker === "дня") && h < 12) h += 12;
   if (marker === "ночи" && h === 12) h = 0;
@@ -218,6 +263,21 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
       ranges.push({ index: m.index, length: m[0].length, time: parsed[0] });
     }
   }
+  // Обороты вида «восемнадцать часов» — без предлога. Ищем только там, где
+  // рядом нет предлога «в»: иначе одно и то же время нашлось бы дважды.
+  for (const m of normalized.matchAll(hourClause)) {
+    // «через два часа» и «каждые два часа» — отсчёт, а не время суток.
+    if (countingBefore.test(normalized.slice(0, m.index))) continue;
+    const before = normalized.slice(0, m.index);
+    if (/(?<!\p{L})в\s*$/iu.test(before)) continue;
+    const time = parseTime(m[1]);
+    if (!time) continue;
+    times.push(time);
+    ranges.push({ index: m.index, length: m[0].length, time });
+  }
+  // Замены идут с конца строки, поэтому диапазоны должны быть в порядке
+  // возрастания позиции: два прохода поиска выше дают их вперемешку.
+  ranges.sort((a, b) => a.index - b.index);
   const ambiguous =
     ranges.length > 1 &&
     ranges

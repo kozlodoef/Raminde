@@ -193,6 +193,52 @@ export function toDigits(phrase, parsed, now = new Date()) {
     return clock ? 'в ' + clock : full;
   });
 
+  // --- 1а. Часы без предлога: «восемнадцать часов полить» → «18:00 полить» ---
+  // «Восемнадцать часов» распознаётся как время, но в поле оставалось
+  // словами: человек не видел, что час понят верно, и переспрашивал себя.
+  // Минуты учитываем отдельно: «девятнадцать часов тридцать минут» → 19:30.
+  const bareHourRe = new RegExp(
+    '(?<!\\p{L})(' +
+      NUMBER_WORD +
+      ')\\s+час(?:а|ов)?' +
+      '(?:\\s+(' +
+      NUMBER_WORD +
+      ')\\s*минут[а-яё]*)?' +
+      '\\s*(утра|вечера|дня|ночи)?(?!\\p{L}|\\d)',
+    'giu',
+  );
+  out = out.replace(bareHourRe, (full, num, minNum, marker) => {
+    // «через два часа» и «каждые два часа» — не время суток: их разбирает
+    // отдельная ветка ниже, здесь трогать нельзя.
+    const before = out.slice(0, out.indexOf(full));
+    if (/(?:через|кажд[а-яё]*|раз\s+в)\s*$/iu.test(before)) return full;
+    let h = wordToNumber(num);
+    if (h === null || h > 23) return full;
+    const m = (marker || '').toLowerCase();
+    if ((m === 'вечера' || m === 'дня') && h < 12) h += 12;
+    if (m === 'ночи' && h === 12) h = 0;
+    const minutes = minNum ? wordToNumber(minNum) : 0;
+    if (minutes === null || minutes > 59) return full;
+    const clock = toClock(h, minutes);
+    return clock || full;
+  });
+
+  // --- 1а-2. Минуты словами рядом с уже цифровым часом ---
+  // «в 19:00 тридцать минут» → «в 19:30»: час заменился выше, но минуты
+  // остались словами, и получалось «19:00 тридцать минут».
+  out = out.replace(
+    new RegExp(
+      '(\\d{1,2}:\\d{2})\\s+(' + NUMBER_WORD + ')\\s*минут[а-яё]*(?!\\p{L})',
+      'giu',
+    ),
+    (full, clock, minNum) => {
+      const minutes = wordToNumber(minNum);
+      if (minutes === null || minutes > 59) return full;
+      const [h] = clock.split(':');
+      return h + ':' + pad2(minutes);
+    },
+  );
+
   // --- 1б. Уже цифровое время с лишним словом суток: «в 10:00 утра» → «в 10:00» ---
   // Слово суток после цифр ни на что не влияет — час уже однозначен,
   // но в поле ввода оно мешает читать.
