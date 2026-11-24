@@ -103,21 +103,39 @@ export function parseEditor(phrase, current, now = new Date(), options = {}) {
     color: current.color,
   };
 }
-export function toggleEditorDate(current, date) {
+/**
+ * Отмечает или снимает дату на календаре.
+ *
+ * options.maxDates — сколько дат разрешено на одно событие. В бесплатной
+ * версии это одна дата: несколько дат на событие — возможность ПРО-версии.
+ * Снять уже выбранную дату можно всегда, иначе человек не смог бы передумать.
+ *
+ * Возвращает { draft, blocked }: blocked сообщает, что попытка отклонена, и
+ * вызывающий код показывает пояснение. Возвращать ошибку исключением здесь
+ * неудобно: выбор даты — обычное действие, и оно не должно ломать экран.
+ */
+export function toggleEditorDate(current, date, options = {}) {
+  const maxDates = Number.isFinite(options.maxDates) ? options.maxDates : null;
   const selected = current.selectedDates ?? current.dates ?? [];
-  const dates = selected.includes(date)
+  const removing = selected.includes(date);
+  if (!removing && maxDates !== null && selected.length >= maxDates)
+    return { draft: current, blocked: true };
+  const dates = removing
     ? selected.filter((d) => d !== date)
     : [...selected, date].sort();
   return {
-    ...current,
-    selectedDates: dates,
-    dates,
-    dateConflict: null,
-    schedule: {
-      ...current.schedule,
-      kind: "dates",
+    blocked: false,
+    draft: {
+      ...current,
+      selectedDates: dates,
       dates,
-      times: current.times || [],
+      dateConflict: null,
+      schedule: {
+        ...current.schedule,
+        kind: "dates",
+        dates,
+        times: current.times || [],
+      },
     },
   };
 }

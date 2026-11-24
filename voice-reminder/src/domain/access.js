@@ -37,3 +37,21 @@ export function accessActive(access, now = Date.now()) {
 export function dateSpeechEnabled(bill) {
   return !!bill?.premium;
 }
+
+/** Сколько дат можно отметить на одно событие в бесплатной версии. */
+export const FREE_DATES_PER_EVENT = 1;
+/** Сколько напоминаний можно создать на один день в бесплатной версии. */
+export const FREE_REMINDERS_PER_DAY = 3;
+
+/** Подписка активна: ограничения бесплатной версии не действуют. */
+export function isPro(bill) {
+  return !!bill?.premium;
+}
+
+/**
+ * Сообщение о возможности платной версии.
+ *
+ * Показываем именно его, а не сухое «нельзя»: человек должен понимать, что
+ * ограничение не поломка, и что за ним стоит.
+ */
+export const PRO_HINT = "Это доступно в ПРО-версии.";

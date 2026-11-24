@@ -34,19 +34,19 @@ test("manual phrase supports three times in one group", () => {
   assert.deepEqual(d.times, ["09:00", "11:00", "20:00"]);
 });
 test("calendar tap toggles and preserves one group color", () => {
-  let d = toggleEditorDate(empty(), "2026-10-21");
-  d = toggleEditorDate(d, "2026-10-23");
+  let d = toggleEditorDate(empty(), "2026-10-21").draft;
+  d = toggleEditorDate(d, "2026-10-23").draft;
   assert.deepEqual(d.dates, ["2026-10-21", "2026-10-23"]);
-  d = toggleEditorDate(d, "2026-10-21");
+  d = toggleEditorDate(d, "2026-10-21").draft;
   assert.deepEqual(d.dates, ["2026-10-23"]);
-  d = toggleEditorDate(d, "2026-10-23");
+  d = toggleEditorDate(d, "2026-10-23").draft;
   assert.deepEqual(d.dates, []);
   assert.equal(d.color, "#19815d");
 });
 test("speech arriving after taps retains calendar dates", () => {
   const d = parseEditor(
     "Купить хлеб в 20",
-    toggleEditorDate(empty(), "2026-10-23"),
+    toggleEditorDate(empty(), "2026-10-23").draft,
     now,
   );
   assert.deepEqual(buildGroup(d, now.getTime()).schedule.dates, ["2026-10-23"]);
@@ -54,14 +54,14 @@ test("speech arriving after taps retains calendar dates", () => {
 test("calendar tap after spoken tomorrow overrides spoken date", () => {
   const spoken = parseEditor("Завтра в 20 позвонить маме", empty(), now);
   assert.deepEqual(spoken.dates, ["2026-10-20"]);
-  const picked = toggleEditorDate(spoken, "2026-10-23");
+  const picked = toggleEditorDate(spoken, "2026-10-23").draft;
   assert.deepEqual(picked.dates, ["2026-10-23"]);
   assert.equal(picked.dateConflict, null);
 });
 test("different explicit speech and calendar dates require a decision", () => {
   const d = parseEditor(
     "Завтра в 20 позвонить маме",
-    toggleEditorDate(empty(), "2026-10-23"),
+    toggleEditorDate(empty(), "2026-10-23").draft,
     now,
   );
   assert.ok(d.dateConflict);

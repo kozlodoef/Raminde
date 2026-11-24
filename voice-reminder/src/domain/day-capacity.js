@@ -34,10 +34,18 @@ function monthOf(t) {
 export function assertDailyCapacity(
   existing,
   candidates,
-  { events = [], now = Date.now() } = {},
+  { events = [], now = Date.now(), maxPerDay = MAX_DAILY_EVENTS } = {},
 ) {
   const enabled = candidates.filter((r) => r.enabled !== false);
   if (!enabled.length) return;
+  // Предел на день. В бесплатной версии он ниже, и при его превышении
+  // сообщение другое: человеку важно понять, что дело в версии, а не в
+  // том, что он что-то сделал неправильно.
+  const limit = Number.isFinite(maxPerDay) ? maxPerDay : MAX_DAILY_EVENTS;
+  const limitMessage = (date, count) =>
+    limit < MAX_DAILY_EVENTS
+      ? `На ${date.split("-").reverse().join(".")} получится ${count} напоминания. В бесплатной версии — не больше ${limit} в день. Больше — в ПРО-версии.`
+      : `На ${date.split("-").reverse().join(".")} получится ${count} событий. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`;
   const months = new Set();
   let recurring = false;
   for (const r of enabled) {
@@ -76,9 +84,6 @@ export function assertDailyCapacity(
       if (affected.has(e.date))
         counts.set(e.date, (counts.get(e.date) || 0) + 1);
     for (const [date, count] of counts)
-      if (count > MAX_DAILY_EVENTS)
-        throw Error(
-          `На ${date.split("-").reverse().join(".")} получится ${count} событий. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`,
-        );
+      if (count > limit) throw Error(limitMessage(date, count));
   }
 }

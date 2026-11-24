@@ -100,16 +100,23 @@ export async function setSettings(settings) {
   s.settings = { ...defaults, ...settings };
   return saveWeb(s);
 }
-export async function putReminder(reminder, { reservation = null } = {}) {
+export async function putReminder(
+  reminder,
+  { reservation = null, maxPerDay = null } = {},
+) {
   if (isNative()) {
     const current = await Native.getState();
     assertDailyCapacity(current.reminders || [], [reminder], {
       events: current.events || [],
+      ...(maxPerDay ? { maxPerDay } : {}),
     });
     return Native.upsert({ reminder, reservation });
   }
   const s = readWeb();
-  assertDailyCapacity(s.reminders, [reminder], { events: s.events });
+  assertDailyCapacity(s.reminders, [reminder], {
+    events: s.events,
+    ...(maxPerDay ? { maxPerDay } : {}),
+  });
   const existing = s.reminders.find((r) => r.id === reminder.id);
   const month = localDate(new Date(), s.quota.timezone).slice(0, 7);
   if (month !== s.quota.month) s.quota = { ...s.quota, month, used: 0 };

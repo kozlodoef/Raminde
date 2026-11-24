@@ -41,7 +41,13 @@ import {
   occurrencesInMonth,
   dropDateWords,
 } from "./domain/groups.js";
-import { accessActive, dateSpeechEnabled } from "./domain/access.js";
+import {
+  accessActive,
+  dateSpeechEnabled,
+  isPro,
+  FREE_DATES_PER_EVENT,
+  FREE_REMINDERS_PER_DAY,
+} from "./domain/access.js";
 import {
   billingConfigured,
   billingStatus,
@@ -342,9 +348,18 @@ export default function App() {
     }, 140);
   }
   const pick = (date) => {
-    const next = toggleEditorDate(draftRef.current, date);
-    draftRef.current = next;
-    setDraft(next);
+    const result = toggleEditorDate(draftRef.current, date, {
+      // В бесплатной версии на событие можно отметить только одну дату.
+      ...(isPro(bill) ? {} : { maxDates: FREE_DATES_PER_EVENT }),
+    });
+    if (result.blocked) {
+      setMessage(
+        `На одно событие в бесплатной версии можно выбрать только одну дату. Несколько дат — в ПРО-версии.`,
+      );
+      return;
+    }
+    draftRef.current = result.draft;
+    setDraft(result.draft);
     setMessage("");
   };
   const remindersKey = JSON.stringify([
@@ -416,7 +431,11 @@ export default function App() {
     let token;
     try {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
-      const s = await putReminder(r, { reservation: token });
+      const s = await putReminder(r, {
+        reservation: token,
+        // В бесплатной версии — не больше трёх напоминаний в день.
+        ...(isPro(bill) ? {} : { maxPerDay: FREE_REMINDERS_PER_DAY }),
+      });
       const stored = s?.reminders?.find((item) => item.id === r.id);
       if (
         !stored ||
@@ -465,7 +484,13 @@ export default function App() {
       const rule = buildGroup(current, Date.now(), {
         allowPast: state?.reminders.some((r) => r.id === current.id),
       });
-      assertDailyCapacity(state.reminders, [rule], { events: state.events });
+      // Проверяем до сохранения, чтобы сообщение появилось сразу и в том же
+      // виде, что и при сохранении: в бесплатной версии — не больше трёх
+      // напоминаний в день.
+      assertDailyCapacity(state.reminders, [rule], {
+        events: state.events,
+        ...(isPro(bill) ? {} : { maxPerDay: FREE_REMINDERS_PER_DAY }),
+      });
       await persist(rule);
       const fresh = blank(
         state.reminders.length +
@@ -884,9 +909,9 @@ export default function App() {
                     : "Пробный месяц завершён"}
               </p>
               <p className="hint">
-                Без ограничения числа напоминаний. После пробного месяца
-                создание и изменение — по подписке. Сохранённые напоминания
-                продолжают работать.
+                {isPro(bill)
+                  ? "Без ограничений: любое число напоминаний в день, несколько дат на событие, распознавание дат голосом."
+                  : `Бесплатно: до ${FREE_REMINDERS_PER_DAY} напоминаний в день и одна дата на событие. В ПРО-версии — без ограничений, несколько дат на событие и распознавание дат голосом. Сохранённые напоминания продолжают работать.`}
               </p>
               <button
                 className="secondary full"
