@@ -40,7 +40,7 @@ export function dateNote(draft) {
   const word = draft?.spokenDateWord;
   if (word === "tomorrow" || word === "afterTomorrow")
     return "Дата не выбрана, напоминание записано на сегодня. Чтобы перенести на другой день, отметьте его в календаре.";
-  return "Дата не выбрана, напоминание записано на сегодня.";
+  return "Напоминание записано на сегодня.";
 }
 
 /**
