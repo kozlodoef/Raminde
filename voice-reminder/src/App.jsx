@@ -39,8 +39,9 @@ import {
   colorFor,
   buildGroup,
   occurrencesInMonth,
+  dropDateWords,
 } from "./domain/groups.js";
-import { accessActive } from "./domain/access.js";
+import { accessActive, dateSpeechEnabled } from "./domain/access.js";
 import {
   billingConfigured,
   billingStatus,
@@ -93,7 +94,11 @@ export default function App() {
     recognitionTask = useRef(null),
     saving = useRef(false),
     gate = useRef(sessionGate()),
-    parsedTranscript = useRef("");
+    parsedTranscript = useRef(""),
+    // Доступно ли распознавание дат из речи. Держим в ref: обработчики
+    // голосовой сессии живут дольше одного рендера и должны видеть текущее
+    // значение, а не то, что было при их создании.
+    datesFromSpeech = useRef(false);
   draftRef.current = draft;
   useEffect(() => {
     const legacy = cachedDrafts();
@@ -164,6 +169,9 @@ export default function App() {
         .then(setBill)
         .catch((e) => setMessage(e.message));
   }, [!!state]);
+  useEffect(() => {
+    datesFromSpeech.current = dateSpeechEnabled(bill);
+  }, [bill]);
   const alarm = state?.events.find((e) =>
     ["ringing", "waiting"].includes(e.state),
   );
@@ -203,12 +211,21 @@ export default function App() {
       const applyTranscript = (text) => {
         if (!valid() || !text || parsedTranscript.current === text) return;
         parsedTranscript.current = text;
-        const parsed = parseEditor(text, draftRef.current);
+        const parsed = parseEditor(text, draftRef.current, new Date(), {
+          dates: datesFromSpeech.current,
+        });
         draftRef.current = parsed;
         setDraft(parsed);
         // Показываем расшифровку цифрами: дату и время человек проверяет
         // глазами, и «25.12 в 19:30» проверяется быстрее, чем словами.
-        setLive(toDigits(text, parsed));
+        // Когда даты из речи не разбираются, слова даты просто убираем:
+        // показывать «25.11» нельзя — напоминание встанет на сегодня,
+        // и человек видел бы одно, а получил другое.
+        setLive(
+          datesFromSpeech.current
+            ? toDigits(text, parsed)
+            : dropDateWords(toDigits(text, parsed)),
+        );
       };
       const session = startContinuousDictation({
         restartOnEnd: !isNative(),
@@ -217,8 +234,15 @@ export default function App() {
         // Промежуточная расшифровка тоже цифрами: иначе во время речи
         // мелькали слова, а в конце текст менялся на цифры — выглядело как
         // «подмена». Разбор ещё не готов, поэтому передаём пустой объект.
+        // Дни недели и «завтра» из речи убираем так же, как в готовом тексте:
+        // иначе посреди диктовки мелькала дата, которой в напоминании не будет.
         onInterim: (text) =>
-          valid() && setLive(toDigits(text, draftRef.current || {})),
+          valid() &&
+          setLive(
+            datesFromSpeech.current
+              ? toDigits(text, draftRef.current || {})
+              : dropDateWords(toDigits(text, draftRef.current || {})),
+          ),
         onFinal: applyTranscript,
       });
       recording.current = session;
@@ -303,14 +327,18 @@ export default function App() {
     if (parseTimer.current) clearTimeout(parseTimer.current);
     parseTimer.current = setTimeout(() => {
       parseTimer.current = null;
-      const next = parseEditor(phrase, draftRef.current);
+      const next = parseEditor(phrase, draftRef.current, new Date(), {
+        dates: datesFromSpeech.current,
+      });
       draftRef.current = next;
       setDraft(next);
       // Показываем фразу цифрами: «двадцать пятого декабря в 19:30»
       // читается и проверяется быстрее, чем «двадцать пятого декабря
       // в половину восьмого вечера». Сырая расшифровка остаётся в
-      // originalTranscript и не теряется.
-      setLive(toDigits(phrase, next));
+      // originalTranscript и не теряется. Когда даты из речи не разбираются,
+      // слова даты из подсказки убираем — напоминание встанет на сегодня.
+      const shown = toDigits(phrase, next);
+      setLive(datesFromSpeech.current ? shown : dropDateWords(shown));
     }, 140);
   }
   const pick = (date) => {
@@ -568,7 +596,7 @@ export default function App() {
                 readOnly={voiceActive || busy}
                 spellCheck="true"
                 style={editorFont ? { fontSize: editorFont + "px" } : undefined}
-                placeholder="Нажмите «Начать». Назовите время и событие, например: «завтра в семь утра полить цветы». Даты отметьте на календаре, затем нажмите «Готово». Если дату не назвали и не отметили, напоминание встанет на сегодня."
+                placeholder="Нажмите «Начать». Назовите время и событие, например: «в семь утра полить цветы». Даты отметьте на календаре, затем нажмите «Готово». Если дату не отметили, напоминание встанет на сегодня."
                 onChange={(e) => typePhrase(e.target.value)}
               />
             </section>
@@ -1034,10 +1062,15 @@ export default function App() {
             setMessage("");
           }}
           onPickText={() => {
-            const next = parseEditor(editorPhrase(draft), {
-              ...draft,
-              selectedDates: [],
-            });
+            const next = parseEditor(
+              editorPhrase(draft),
+              {
+                ...draft,
+                selectedDates: [],
+              },
+              new Date(),
+              { dates: datesFromSpeech.current },
+            );
             draftRef.current = next;
             setDraft(next);
             setCreating(true);

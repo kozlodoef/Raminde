@@ -1,4 +1,4 @@
-import { parseGroup } from "./groups.js";
+import { parseGroup, dropDateWords } from "./groups.js";
 import { toDigits } from "./phrase-digits.js";
 import { spokenDate, stripDate } from "./dates-spoken.js";
 
@@ -20,8 +20,46 @@ export function editorPhrase(draft, now = new Date()) {
     .join(" ")
     .trim();
 }
-export function parseEditor(phrase, current, now = new Date()) {
-  const parsed = parseGroup(phrase, current.selectedDates || [], now);
+/**
+ * Разбирает фразу из поля ввода.
+ *
+ * options.dates — понимать ли даты, сказанные словами. В бесплатной версии
+ * это выключено: время и событие распознаются голосом, а даты человек
+ * отмечает на календаре. Если не отметил — напоминание встаёт на сегодня.
+ */
+export function parseEditor(phrase, current, now = new Date(), options = {}) {
+  const dateSpeech = options.dates !== false;
+  const parsed = parseGroup(
+    phrase,
+    current.selectedDates || [],
+    now,
+    { dates: dateSpeech },
+  );
+
+  // Распознавание дат из речи — платная возможность. Когда она недоступна,
+  // слова даты из фразы не разбираем, но и в текст напоминания не пускаем:
+  // иначе получилось бы «Завтра полить цветы» вместо «Полить цветы».
+  if (!dateSpeech) {
+    const clean = dropDateWords(phrase);
+    const rest = parseGroup(clean || "", [], now, { dates: false });
+    return {
+      ...current,
+      ...rest,
+      phrase: clean,
+      text: rest.text,
+      dates: current.selectedDates || [],
+      selectedDates: current.selectedDates || [],
+      dateConflict: null,
+      schedule: {
+        ...rest.schedule,
+        kind: "dates",
+        dates: current.selectedDates || [],
+        times: rest.times || [],
+      },
+      id: current.id,
+      color: current.color,
+    };
+  }
 
   // Дату, произнесённую словами («двадцать пятого декабря», «первого
   // сентября»), parseGroup не понимает — она уходила в текст, и
@@ -33,7 +71,7 @@ export function parseEditor(phrase, current, now = new Date()) {
       parsed.dates && parsed.dates.length === 1 && parsed.dates[0] === spoken.date;
     if (!alreadySame) {
       const rest = stripDate(phrase, spoken.match).trim();
-      const withoutDate = parseGroup(rest || phrase, [], now);
+      const withoutDate = parseGroup(rest || phrase, [], now, { dates: dateSpeech });
       return {
         ...current,
         ...withoutDate,

@@ -88,6 +88,68 @@ const timeClause = new RegExp(
     ")*)(?!\\p{L}|\\d)",
   "giu",
 );
+/**
+ * Убирает из фразы названную словами дату.
+ *
+ * Нужно для бесплатной версии: там распознаются только время и событие, а
+ * дату человек отмечает на календаре. Без вырезания слова «завтра» и
+ * «двадцать пятого декабря» попадали бы в текст напоминания — получалось бы
+ * «Завтра полить цветы» вместо «Полить цветы».
+ */
+export function dropDateWords(phrase) {
+  const months =
+    "январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр";
+  // Границы слов задаём просмотром, а не \b: в JavaScript \b не считает
+  // кириллицу буквами, и «завтра» им не ловится вовсе.
+  const LB = "(?<!\\p{L})";
+  const RB = "(?!\\p{L})";
+  return phrase
+    .replace(
+      // «двадцать пятого декабря», «25 декабря», «5 мая 2027»
+      new RegExp(
+        "(?:\\d{1,2}|(?:двадцать|тридцать)\\s+)?(?:[а-яё]+\\s+)?(?:" +
+          months +
+          ")[а-яё]*(?:\\s+\\d{4})?",
+        "giu",
+      ),
+      " ",
+    )
+    .replace(
+      // «25.12», «25/12/2026»
+      new RegExp("(?<![\\d./])\\d{1,2}[./]\\d{1,2}(?:[./]\\d{2,4})?(?![\\d./])", "gu"),
+      " ",
+    )
+    .replace(
+      // «в пятницу», «следующий вторник», «по средам»
+      new RegExp(
+        LB +
+          "(?:(?:в|во|по|на)\\s+)?(?:следующ[а-яё]*\\s+)?(?:понедельник|вторник|сред[а-яё]*|четверг|пятниц[а-яё]*|суббот[а-яё]*|воскресень[а-яё]*)[а-яё]*" +
+          RB,
+        "giu",
+      ),
+      " ",
+    )
+    .replace(
+      // «сегодня», «завтра», «послезавтра», «вчера»
+      new RegExp(LB + "(?:в\\s+)?(?:сегодня|завтра|послезавтра|вчера)" + RB, "giu"),
+      " ",
+    )
+    .replace(
+      // «через два дня», «через неделю» — это дата, а не время суток
+      new RegExp(
+        LB +
+          "через\\s+(?:\\d+|полтора|полторы|[а-яё]+)(?:\\s+[а-яё]+)?\\s*(?:дн[а-яё]*|ден[а-яё]*|суток|недел[а-яё]*|месяц[а-яё]*|год[а-яё]*)" +
+          RB,
+        "giu",
+      ),
+      " ",
+    )
+    // Предлог «в» перед временем не трогаем: он принадлежит времени
+    // («в 07:00 полить цветы»), а не убранной дате.
+    .replace(/\s+/g, " ")
+    .replace(/^[\s,;:-]+|[\s,;:-]+$/g, "")
+    .trim();
+}
 function parseTime(value) {
   value = value.toLowerCase().replaceAll("ё", "е");
   // «в обед» / «в полдень» / «в полночь» — сразу известное время.
@@ -104,7 +166,16 @@ function parseTime(value) {
   if (marker === "ночи" && h === 12) h = 0;
   return h >= 0 && h < 24 && m >= 0 && m < 60 ? pad(h) + ":" + pad(m) : null;
 }
-export function parseGroup(phrase, selectedDates = [], now = new Date()) {
+/**
+ * Разбирает сказанную фразу в напоминание.
+ *
+ * options.dates — понимать ли даты, названные словами («завтра», «в пятницу»,
+ * «25 декабря»). По умолчанию да, но в бесплатной версии распознавание дат
+ * выключено: даты человек отмечает на календаре, а если не отметил — берётся
+ * сегодняшний день. Время и событие голосом работают всегда.
+ */
+export function parseGroup(phrase, selectedDates = [], now = new Date(), options = {}) {
+  const dateSpeech = options.dates !== false;
   let normalized = phrase.replace(
       new RegExp(
         "в\\s+(" +
@@ -143,7 +214,9 @@ export function parseGroup(phrase, selectedDates = [], now = new Date()) {
       "в " +
       x.time +
       normalized.slice(x.index + x.length);
-  const parsed = parseIntent(normalized, now);
+  const parsed = parseIntent(dateSpeech ? normalized : dropDateWords(normalized), now, {
+    dates: dateSpeech,
+  });
   if (ambiguous)
     parsed.issues.push(
       "Разные события или расписания задайте по очереди кнопкой «Добавить»",
@@ -173,6 +246,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date()) {
     };
   }
   const dateSpoken =
+    dateSpeech &&
     /сегодня|завтра|послезавтра|понедель|вторник|сред[ау]|четверг|пятниц|суббот|воскрес|январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр|\d{1,2}[./]\d{1,2}/iu.test(
       normalized,
     );
@@ -191,7 +265,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date()) {
   );
   if (!times.length) issues.push("Во сколько напомнить?");
   const schedule =
-    /через\s/iu.test(normalized) && !selectedDates.length
+    dateSpeech && /через\s/iu.test(normalized) && !selectedDates.length
       ? parsed.schedule
       : { ...defaultSchedule(now), kind: "dates", dates: dates.sort(), times };
   return {
@@ -205,6 +279,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date()) {
     times,
     issues,
     dateConflict:
+      dateSpeech &&
       (spokenDate || /через\s/iu.test(normalized)) &&
       selectedDates.length &&
       (selectedDates.length !== 1 || selectedDates[0] !== spokenDate)
