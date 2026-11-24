@@ -19,6 +19,8 @@ const PATHS = {
   stop: "M6 6h12v12H6Z",
   edit: "M4 20l4-1L20 7l-3-3L5 16Z",
   trash: "M4 6h16M9 3h6M7 6l1 15h8l1-15M10 10v7M14 10v7",
+  "chev-up": "M6 15l6-6 6 6",
+  "chev-down": "M6 9l6 6 6-6",
 };
 
 export default function Icon({ name, size = 24 }) {

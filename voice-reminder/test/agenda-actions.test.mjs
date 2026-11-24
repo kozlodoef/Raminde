@@ -5,13 +5,15 @@ import {
   ruleDates,
   spansSeveralDays,
   ruleOccurrenceCount,
+  occurrenceScope,
+  scopeWording,
 } from "../src/domain/schedule-dates.js";
 import { UI_SOUNDS, playUiSound } from "../src/lib/ui-sounds.js";
 import {
-  swipeOffset,
-  swipeArmed,
-  swipeMaxOffset,
-} from "../src/lib/swipe-math.js";
+  parseTimeDigits,
+  formatTimeDigits,
+  stepTimeDigit,
+} from "../src/lib/flip-time.js";
 
 const dated = (dates) => ({ schedule: { kind: "dates", dates } });
 const once = (at) => ({ schedule: { kind: "once", at } });
@@ -98,6 +100,37 @@ test("две даты и два времени — четыре события",
   assert.equal(ruleOccurrenceCount(r), 4);
 });
 
+test("одна дата с двумя временами не считается несколькими датами", () => {
+  // Ошибка, которую замечал человек: «запланировано на несколько дат»
+  // появлялось, хотя дата была одна. Спрашивать нужно только при
+  // нескольких ДАТАХ, а не при нескольких временах в один день.
+  const r = {
+    schedule: {
+      kind: "dates",
+      dates: ["2026-11-24"],
+      times: ["09:00", "12:00"],
+    },
+  };
+  const s = occurrenceScope(r);
+  assert.equal(s.ask, false);
+  assert.equal(s.multiDay, false);
+  assert.equal(scopeWording(r), "запланировано один раз");
+});
+
+test("две даты с одним временем требуют выбора", () => {
+  const r = {
+    schedule: {
+      kind: "dates",
+      dates: ["2026-11-24", "2026-11-26"],
+      times: ["09:00"],
+    },
+  };
+  const s = occurrenceScope(r);
+  assert.equal(s.ask, true);
+  assert.equal(s.multiDay, true);
+  assert.match(scopeWording(r), /несколько дат/);
+});
+
 test("разовое напоминание — одно событие", () => {
   assert.equal(
     ruleOccurrenceCount(once(new Date("2026-11-24T19:30:00").toISOString())),
@@ -110,31 +143,60 @@ test("повтор не имеет конечного числа событий"
   assert.equal(ruleOccurrenceCount(undefined), 0);
 });
 
-// --- Арифметика слайдера «Удалить все!» ---
+// --- Перекидные цифры времени ---
 
-test("ползунок едет вправо за пальцем", () => {
-  assert.equal(swipeOffset({ startX: 30, currentX: 130, max: 300 }), 100);
+test("разбор времени в четыре цифры", () => {
+  assert.deepEqual(parseTimeDigits("15:00"), [1, 5, 0, 0]);
+  assert.deepEqual(parseTimeDigits("07:30"), [0, 7, 3, 0]);
+  assert.deepEqual(parseTimeDigits("9:5"), [0, 9, 0, 5]);
+  assert.deepEqual(parseTimeDigits("00:00"), [0, 0, 0, 0]);
 });
 
-test("ползунок не уезжает в минус при движении влево", () => {
-  assert.equal(swipeOffset({ startX: 130, currentX: 30, max: 300 }), 0);
+test("сборка строки из цифр", () => {
+  assert.equal(formatTimeDigits([1, 5, 0, 0]), "15:00");
+  assert.equal(formatTimeDigits([0, 7, 3, 0]), "07:30");
 });
 
-test("ползунок не выходит за правый край дорожки", () => {
-  assert.equal(swipeOffset({ startX: 30, currentX: 999, max: 300 }), 300);
+test("минуты: 59 → 00 с шагом единицы", () => {
+  let d = parseTimeDigits("15:59");
+  d = stepTimeDigit(d, 3, 1);
+  assert.deepEqual(d, [1, 5, 0, 0]);
+  assert.equal(formatTimeDigits(d), "15:00");
 });
 
-test("жест засчитывается только у правого края", () => {
-  assert.equal(swipeArmed(100, 300), false);
-  assert.equal(swipeArmed(255, 300), true); // 0.85 от 300
-  assert.equal(swipeArmed(300, 300), true);
+test("минуты: 00 → 59 с шагом назад", () => {
+  let d = parseTimeDigits("00:00");
+  d = stepTimeDigit(d, 3, -1);
+  assert.deepEqual(d, [0, 0, 5, 9]);
+  assert.equal(formatTimeDigits(d), "00:59");
 });
 
-test("без дорожки жест не засчитывается", () => {
-  assert.equal(swipeArmed(0, 0), false);
+test("часы: 23 → 00 (24 часа не бывает)", () => {
+  // Целый час оборачивается по кругу: после 23:00 идёт 00:00.
+  let d = parseTimeDigits("23:00");
+  d = stepTimeDigit(d, 1, 1);
+  assert.deepEqual(d, [0, 0, 0, 0]);
+  assert.equal(formatTimeDigits(d), "00:00");
 });
 
-test("дорожка учитывает ширину ползунка", () => {
-  assert.equal(swipeMaxOffset(361, 48, 8), 305);
-  assert.equal(swipeMaxOffset(0, 48, 8), 1);
+test("часы: 00 → 23 с шагом назад", () => {
+  let d = parseTimeDigits("00:00");
+  d = stepTimeDigit(d, 1, -1);
+  assert.deepEqual(d, [2, 3, 0, 0]);
+  assert.equal(formatTimeDigits(d), "23:00");
+});
+
+test("часы: 10 → 20 с шагом десятков", () => {
+  // Десятки часов сдвигают весь час на 10.
+  let d = parseTimeDigits("10:00");
+  d = stepTimeDigit(d, 0, 1);
+  assert.deepEqual(d, [2, 0, 0, 0]);
+  assert.equal(formatTimeDigits(d), "20:00");
+});
+
+test("минуты: 59 → 09 с шагом десятков", () => {
+  let d = parseTimeDigits("15:59");
+  d = stepTimeDigit(d, 2, 1);
+  assert.deepEqual(d, [1, 5, 0, 9]);
+  assert.equal(formatTimeDigits(d), "15:09");
 });

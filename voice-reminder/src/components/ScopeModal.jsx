@@ -13,7 +13,7 @@ export default function ScopeModal({
   action = "delete",
   text,
   dateLabel,
-  occurrences,
+  wording,
   onOne,
   onAll,
   onBack,
@@ -24,8 +24,7 @@ export default function ScopeModal({
   return (
     <Modal title={title} onClose={onBack}>
       <p>
-        «{text}» запланировано на несколько дат
-        {occurrences ? ` (${occurrences})` : ""}.
+        «{text}» {wording}.
       </p>
       <p className="hint">
         {deleting ? "Убрать" : "Изменить"} только {dateLabel} или все даты сразу?

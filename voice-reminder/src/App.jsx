@@ -65,11 +65,11 @@ import DateConflictBubble from "./components/DateConflictBubble.jsx";
 import EventModal from "./components/EventModal.jsx";
 import DeleteGroupModal from "./components/DeleteGroupModal.jsx";
 import ScopeModal from "./components/ScopeModal.jsx";
-import SwipeToDelete from "./components/SwipeToDelete.jsx";
-import WheelPicker from "./components/WheelPicker.jsx";
+import FlipTimePicker from "./components/FlipTimePicker.jsx";
 import AccessModal from "./components/AccessModal.jsx";
 import {
-  ruleOccurrenceCount,
+  occurrenceScope,
+  scopeWording,
   ruleDates,
 } from "./domain/schedule-dates.js";
 import { playUiSound } from "./lib/ui-sounds.js";
@@ -838,15 +838,28 @@ export default function App() {
                 {eventCount(shownEntries.length)}
               </strong>
             </div>
-            {/* Удаление всего дня — сразу под датой, до списка: так это
-                читается как действие над днём, а не над последней карточкой.
-                Ползунок надо довести до конца, случайно так не нажать. */}
+            {/* Удаление всего дня — сразу под датой. Надпись и
+                переключатель того же вида, что на карточках: включён —
+                события на месте, выключили — день очищается. */}
             {dayFilter && shownEntries.length > 0 && (
-              <SwipeToDelete
-                label="Удалить все!"
-                busy={clearingDay}
-                onConfirm={() => clearDay(dayFilter)}
-              />
+              <div className="delete-day-row">
+                <span className="delete-day-label">
+                  {clearingDay ? "Удаляю…" : "Удалить всё"}
+                </span>
+                <label
+                  className="agenda-switch"
+                  style={{ "--event-color": "var(--danger)" }}
+                >
+                  <input
+                    type="checkbox"
+                    checked
+                    disabled={clearingDay}
+                    aria-label="Удалить все события этого дня"
+                    onChange={() => clearDay(dayFilter)}
+                  />
+                  <span aria-hidden="true" />
+                </label>
+              </div>
             )}
             {!shownEntries.length && (
               <div className="empty-agenda">
@@ -906,8 +919,8 @@ export default function App() {
                               playUiSound("delete", {
                                 enabled: settings.uiSounds !== false,
                               });
-                              const count = ruleOccurrenceCount(rule);
-                              if (count <= 1) {
+                              const scope = occurrenceScope(rule);
+                              if (!scope.ask) {
                                 removeOne(e);
                                 return;
                               }
@@ -915,7 +928,8 @@ export default function App() {
                                 action: "delete",
                                 rule,
                                 event: e,
-                                dates: count,
+                                ...scope,
+                                wording: scopeWording(rule),
                               });
                               setModal("scope");
                             }}
@@ -931,8 +945,8 @@ export default function App() {
                             playUiSound("edit", {
                               enabled: settings.uiSounds !== false,
                             });
-                            const count = ruleOccurrenceCount(rule);
-                            if (count <= 1) {
+                            const scope = occurrenceScope(rule);
+                            if (!scope.ask) {
                               setEditingTime(e.id);
                               setTimeEdits((v) => ({ ...v, [e.id]: e.time }));
                               return;
@@ -941,7 +955,8 @@ export default function App() {
                               action: "time",
                               rule,
                               event: e,
-                              dates: count,
+                              ...scope,
+                              wording: scopeWording(rule),
                             });
                             setModal("scope");
                           }}
@@ -949,11 +964,11 @@ export default function App() {
                           <Icon name="edit" size={18} />
                         </button>
                       </div>
-                      {/* Правка времени прямо в карточке: прокрутка часов и
-                          минут. Без ухода с экрана — человек видит, к какому
-                          дню относится время. */}
+                      {/* Правка времени прямо в карточке: перекидные
+                          цифры. Без ухода с экрана — человек видит, к
+                          какому дню относится время. */}
                       {editingTime === e.id && (
-                        <WheelPicker
+                        <FlipTimePicker
                           value={timeEdits[e.id] || e.time}
                           soundEnabled={settings.uiSounds !== false}
                           onChange={(v) =>
@@ -1298,7 +1313,7 @@ export default function App() {
           action={scope.action}
           text={scope.rule.text}
           dateLabel={dateLabel(scope.event.date)}
-          occurrences={scope.dates}
+          wording={scope.wording}
           busy={busy}
           onBack={() => {
             setModal(null);
