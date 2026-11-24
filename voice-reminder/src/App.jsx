@@ -64,7 +64,14 @@ import WelcomeModal from "./components/WelcomeModal.jsx";
 import DateConflictBubble from "./components/DateConflictBubble.jsx";
 import EventModal from "./components/EventModal.jsx";
 import DeleteGroupModal from "./components/DeleteGroupModal.jsx";
+import ScopeModal from "./components/ScopeModal.jsx";
+import SwipeToDelete from "./components/SwipeToDelete.jsx";
 import AccessModal from "./components/AccessModal.jsx";
+import {
+  ruleOccurrenceCount,
+  ruleDates,
+} from "./domain/schedule-dates.js";
+import { playUiSound } from "./lib/ui-sounds.js";
 import {
   eventCount,
   blank,
@@ -74,6 +81,7 @@ import {
   shiftMonth,
 } from "./domain/draft-model.js";
 import "./planner.css";
+import "./agenda.css";
 export default function App() {
   const [state, setState] = useState(null),
     [tab, setTab] = useState("home"),
@@ -92,7 +100,13 @@ export default function App() {
     [key, setKey] = useState(""),
     [editing, setEditing] = useState(null),
     [editorFont, setEditorFont] = useState(0),
-    [dayFilter, setDayFilter] = useState(null);
+    [dayFilter, setDayFilter] = useState(null),
+    // Выбор «только это событие / все» при удалении и смене времени.
+    [scope, setScope] = useState(null),
+    [clearingDay, setClearingDay] = useState(false),
+    // Какая карточка сейчас правит время и что в ней введено.
+    [editingTime, setEditingTime] = useState(null),
+    [timeEdits, setTimeEdits] = useState({});
   const recording = useRef(),
     draftRef = useRef(draft),
     editorRef = useRef(null),
@@ -428,9 +442,116 @@ export default function App() {
     setLive("");
     setEditing(null);
   }
-  async function persist(r) {
-    let token;
+  /**
+   * Убирает одно срабатывание, не трогая остальные даты.
+   *
+   * Для правила на несколько дат «удалить» напоминание целиком было бы
+   * слишком грубо: человек убирает карточку одного дня. Остальные даты
+   * остаются, а убранная попадает в исключения расписания.
+   */
+  async function removeOne(entry) {
     try {
+      setState(await skipOccurrence(entry.reminderId, entry.at));
+      setMessage("");
+    } catch (e) {
+      setMessage(e.message);
+    }
+  }
+  /**
+   * Меняет время одного срабатывания.
+   *
+   * Без окна: показываем поле ввода времени рядом с карточкой. Человек
+   * печатает «19:30», нажимает галочку — и время перенесено. Остальные даты
+   * правила не трогаем: смена времени одного дня не должна двигать серию.
+   */
+  async function changeTimeOne(entry, rule) {
+    const time = timeEdits[entry.id];
+    if (!time || !/^\d{1,2}:\d{2}$/.test(time)) {
+      setMessage("Укажите время в формате чч:мм, например 19:30.");
+      return;
+    }
+    const [h, m] = time.split(":").map(Number);
+    if (h > 23 || m > 59) {
+      setMessage("Такого времени не бывает: часы 0–23, минуты 0–59.");
+      return;
+    }
+    try {
+      // Исключаем старое срабатывание и добавляем новое время на эту дату.
+      const shifted = {
+        ...rule,
+        schedule: {
+          ...rule.schedule,
+          kind: "dates",
+          dates: [
+            ...new Set([...(rule.schedule.dates || [entry.date])]),
+          ].sort(),
+          times: [
+            ...new Set(
+              [...(rule.schedule.times || [entry.time]), time].sort(),
+            ),
+          ],
+          excludedInstants: [
+            ...new Set([
+              ...(rule.schedule.excludedInstants || []),
+              entry.at,
+            ]),
+          ],
+        },
+      };
+      setState(await putReminder(shifted));
+      setTimeEdits((v) => {
+        const next = { ...v };
+        delete next[entry.id];
+        return next;
+      });
+      setEditingTime(null);
+      setMessage(`Время изменено на ${time}.`);
+      playUiSound("confirm", { enabled: settings.uiSounds !== false });
+    } catch (e) {
+      setMessage(e.message);
+    }
+  }
+  /** Открывает редактор группы: смена времени сразу на всех датах. */
+  function changeTimeAll(rule) {
+    editRule(rule);
+    setMessage("");
+  }
+  /**
+   * Удаляет все напоминания выбранного дня.
+   *
+   * Считаем по дню, а не по правилу: у правила может быть несколько времён,
+   * и убирать его целиком из-за одного дня нельзя — пострадали бы другие дни.
+   */
+  async function clearDay(date) {
+    const targets = entries.filter((e) => e.date === date);
+    if (!targets.length) return;
+    setClearingDay(true);
+    playUiSound("delete", { enabled: settings.uiSounds !== false });
+    try {
+      // Каждый шаг берёт состояние, полученное предыдущим. Если читать
+      // исходное состояние, шаги перезапишут друг друга и сохранится
+      // результат только последнего — часть напоминаний вернулась бы.
+      let next = state;
+      for (const e of targets) {
+        const rule = next.reminders.find((r) => r.id === e.reminderId);
+        if (!rule) continue;
+        const others = ruleDates(rule).filter((d) => d !== date);
+        next =
+          others.length > 0
+            ? await skipOccurrence(e.reminderId, e.at)
+            : await deleteReminder(e.reminderId);
+      }
+      setState(next);
+      setMessage(`Удалено напоминаний: ${targets.length}`);
+      playUiSound("confirm", { enabled: settings.uiSounds !== false });
+    } catch (e) {
+      setMessage(e.message);
+    } finally {
+      setClearingDay(false);
+    }
+  }
+  async function persist(r) {
+    let token;    try {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
       const s = await putReminder(r, {
         reservation: token,
@@ -570,7 +691,6 @@ export default function App() {
   const shownEntries = dayFilter
     ? entries.filter((e) => e.date === dayFilter)
     : entries;
-  const eventDates = [...new Set(shownEntries.map((e) => e.date))];
   return (
     <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
       <div className="planner-content">
@@ -669,116 +789,165 @@ export default function App() {
                 className="text-button back-home"
                 onClick={() => {
                   setTab("home");
+                  setDayFilter(null);
                   setMessage("");
                 }}
               >
                 ← Главная
               </button>
             </header>
-            <div className="agenda-month">
-              <button
-                className="icon-button"
-                aria-label="Предыдущий месяц"
-                onClick={() => {
-                  setDayFilter(null);
-                  setMonth(shiftMonth(month, -1));
-                }}
-              >
-                ‹
-              </button>
-              <span>
-                {new Intl.DateTimeFormat("ru-RU", {
-                  month: "long",
-                  year: "numeric",
-                }).format(new Date(month + "-01T12:00:00"))}
-              </span>
-              <button
-                className="icon-button"
-                aria-label="Следующий месяц"
-                onClick={() => {
-                  setDayFilter(null);
-                  setMonth(shiftMonth(month, 1));
-                }}
-              >
-                ›
-              </button>
+            {/* День и число событий. Переключателя месяца здесь больше нет:
+                в раздел приходят из календаря за конкретным днём, а листать
+                месяцы удобнее на главной. */}
+            <div className="day-filter">
+              <strong>
+                {dayFilter ? dateLabel(dayFilter) : "Все события"}
+                {" · "}
+                {eventCount(shownEntries.length)}
+              </strong>
             </div>
-            {dayFilter && (
-              <div className="day-filter">
-                <strong>
-                  {dateLabel(dayFilter)} · {eventCount(shownEntries.length)}
-                </strong>
-                <button
-                  className="text-button"
-                  onClick={() => setDayFilter(null)}
-                >
-                  Весь месяц
-                </button>
-              </div>
-            )}
             {!shownEntries.length && (
               <div className="empty-agenda">
                 <Icon name="bell" size={32} />
                 <h2>
-                  {dayFilter ? "В этот день нет событий" : "Месяц без событий"}
+                  {dayFilter ? "В этот день нет событий" : "Нет событий"}
                 </h2>
                 <p>
-                  Вернитесь на главную, нажмите «Начать» и выберите этот день.
+                  Вернитесь на главную, нажмите «Начать» и выберите день.
                 </p>
               </div>
             )}
-            {eventDates.map((d) => (
-              <section className="agenda-day" key={d}>
-                <h2>
-                  {dateLabel(d)}
-                  {d === localDate() ? " · Сегодня" : ""}
-                </h2>
-                {shownEntries
-                  .filter((e) => e.date === d)
-                  .map((e) => (
-                    <button
+            {shownEntries.length > 0 && (
+              <div className="agenda-list">
+                {shownEntries.map((e) => {
+                  const rule = state.reminders.find(
+                    (r) => r.id === e.reminderId,
+                  );
+                  const past = e.at < Date.now();
+                  return (
+                    <article
                       key={e.id}
                       className={
-                        "agenda-event " + (e.at < Date.now() ? "past" : "")
+                        "agenda-card" + (past ? " past" : "") + " is-new"
                       }
                       style={eventCardStyle(e.color)}
-                      onClick={() => {
-                        const r = state.reminders.find(
-                          (r) => r.id === e.reminderId,
-                        );
-                        setEditing({ rule: r, event: e });
-                        setModal("event");
-                      }}
                     >
-                      <i style={{ background: e.color }} />
-                      <time>{e.time}</time>
-                      <span>{e.text}</span>
-                      <span className="chevron">›</span>
-                    </button>
-                  ))}
-              </section>
-            ))}
-            {!dayFilter && state.reminders.some((r) => !r.enabled) && (
-              <details className="paused">
-                <summary>Отключённые и завершённые группы</summary>
-                {state.reminders
-                  .filter((r) => !r.enabled)
-                  .map((r) => (
-                    <button
-                      className="agenda-event"
-                      key={r.id}
-                      style={eventCardStyle(colorFor(r))}
-                      onClick={() => {
-                        setEditing({ rule: r });
-                        setModal("event");
-                      }}
-                    >
-                      <i style={{ background: colorFor(r) }} />
-                      <span>{r.text}</span>
-                      <span>›</span>
-                    </button>
-                  ))}
-              </details>
+                      <button
+                        className="agenda-main"
+                        onClick={() => {
+                          if (!rule) return;
+                          setEditing({ rule, event: e });
+                          setModal("event");
+                        }}
+                      >
+                        <time>{e.time}</time>
+                        <span>{e.text}</span>
+                      </button>
+                      <div className="agenda-actions">
+                        {/* Переключатель удаляет напоминание. Всегда
+                            включён: он показывает, что напоминание есть, а
+                            выключение означает удаление. Прошедшее событие
+                            убирается так же — это и просили. */}
+                        <label className="agenda-switch">
+                          <input
+                            type="checkbox"
+                            checked
+                            aria-label={
+                              past
+                                ? "Удалить прошедшее напоминание"
+                                : "Удалить напоминание"
+                            }
+                            onChange={() => {
+                              if (!rule) return;
+                              playUiSound("delete", {
+                                enabled: settings.uiSounds !== false,
+                              });
+                              const count = ruleOccurrenceCount(rule);
+                              if (count <= 1) {
+                                removeOne(e);
+                                return;
+                              }
+                              setScope({
+                                action: "delete",
+                                rule,
+                                event: e,
+                                dates: count,
+                              });
+                              setModal("scope");
+                            }}
+                          />
+                          <span aria-hidden="true" />
+                        </label>
+                        {/* Перо меняет время: тот же выбор «одно / все». */}
+                        <button
+                          className="agenda-pen"
+                          aria-label="Изменить время"
+                          onClick={() => {
+                            if (!rule) return;
+                            playUiSound("edit", {
+                              enabled: settings.uiSounds !== false,
+                            });
+                            const count = ruleOccurrenceCount(rule);
+                            if (count <= 1) {
+                              setEditingTime(e.id);
+                              setTimeEdits((v) => ({ ...v, [e.id]: e.time }));
+                              return;
+                            }
+                            setScope({
+                              action: "time",
+                              rule,
+                              event: e,
+                              dates: count,
+                            });
+                            setModal("scope");
+                          }}
+                        >
+                          <Icon name="edit" size={18} />
+                        </button>
+                      </div>
+                      {/* Правка времени прямо в карточке: без окна и без
+                          ухода с экрана. Поле появляется плавно. */}
+                      {editingTime === e.id && (
+                        <div className="agenda-time-edit">
+                          <input
+                            type="time"
+                            value={timeEdits[e.id] || e.time}
+                            aria-label="Новое время"
+                            onChange={(ev) =>
+                              setTimeEdits((v) => ({
+                                ...v,
+                                [e.id]: ev.target.value,
+                              }))
+                            }
+                          />
+                          <button
+                            className="agenda-time-save"
+                            onClick={() => changeTimeOne(e, rule)}
+                          >
+                            Сохранить
+                          </button>
+                          <button
+                            className="agenda-time-cancel"
+                            onClick={() => setEditingTime(null)}
+                          >
+                            Отмена
+                          </button>
+                        </div>
+                      )}
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+            {/* Слайдер намеренно внизу и отдельно от карточек: удаление всех
+                напоминаний дня необратимо, поэтому жест отличается от
+                обычного нажатия. */}
+            {dayFilter && shownEntries.length > 0 && (
+              <SwipeToDelete
+                label="Удалить все!"
+                busy={clearingDay}
+                onConfirm={() => clearDay(dayFilter)}
+              />
             )}
           </section>
         )}
@@ -1102,6 +1271,51 @@ export default function App() {
             setDraft(next);
             setCreating(true);
             setMessage("");
+          }}
+        />
+      )}
+      {modal === "scope" && scope && (
+        <ScopeModal
+          action={scope.action}
+          text={scope.rule.text}
+          dateLabel={dateLabel(scope.event.date)}
+          occurrences={scope.dates}
+          busy={busy}
+          onBack={() => {
+            setModal(null);
+            setScope(null);
+          }}
+          onOne={async () => {
+            const { action, event } = scope;
+            setModal(null);
+            setScope(null);
+            if (action === "delete") {
+              await removeOne(event);
+            } else {
+              // Правку времени открываем в самой карточке, не уводя с экрана.
+              setEditingTime(event.id);
+              setTimeEdits((v) => ({ ...v, [event.id]: event.time }));
+            }
+            playUiSound("confirm", { enabled: settings.uiSounds !== false });
+          }}
+          onAll={async () => {
+            const { action, rule } = scope;
+            setModal(null);
+            setScope(null);
+            try {
+              if (action === "delete") {
+                playUiSound("delete", {
+                  enabled: settings.uiSounds !== false,
+                });
+                setState(await deleteReminder(rule.id));
+                setMessage("Напоминание удалено со всех дат.");
+              } else {
+                playUiSound("edit", { enabled: settings.uiSounds !== false });
+                changeTimeAll(rule);
+              }
+            } catch (e) {
+              setMessage(e.message);
+            }
           }}
         />
       )}

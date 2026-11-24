@@ -28,6 +28,9 @@ export const defaults = {
   rate: 0.95,
   pickerSound: false,
   autoListen: false,
+  // Тихие отклики на действия: удаление, изменение, переключение.
+  // Отдельно от звука напоминаний: это не сигнал, а подтверждение нажатия.
+  uiSounds: true,
 };
 const KEY = "raminde.v2";
 export function emptyState() {
