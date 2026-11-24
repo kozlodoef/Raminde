@@ -8,6 +8,18 @@
  * переходы ощущаются как тормоза, а резкие — как рывок.
  */
 
+/* Заголовок «События» меньше остальных заголовков страниц: раздел
+ * служебный, и крупная надпись отвлекает от самого дня и карточек.
+ *
+ * Селектор составной намеренно. Общий стиль .planner h1 подключается позже
+ * (theme.css) и при равной специфичности побеждает — заголовок оставался
+ * крупным. Два класса дают нужный приоритет без !important. */
+.page-title.events-title h1 {
+  font-size: 26px;
+  letter-spacing: -0.01em;
+  font-weight: 500;
+}
+
 .agenda-list {
   display: flex;
   flex-direction: column;
@@ -36,6 +48,24 @@
     transform 160ms ease,
     filter 220ms ease,
     opacity 220ms ease;
+}
+
+/* Удаление: карточка уезжает вправо и тает. Движение вправо читается как
+ * «убрали со стола» и не путается с появлением, которое идёт снизу. */
+.agenda-card.is-leaving {
+  animation: agenda-out 280ms cubic-bezier(0.4, 0, 1, 1) both;
+  pointer-events: none;
+}
+
+@keyframes agenda-out {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(120%);
+  }
 }
 
 @keyframes agenda-in {
@@ -92,8 +122,14 @@
 }
 
 .agenda-main span {
-  font-size: 15px;
-  line-height: 1.45;
+  /* Изящнее основного: чуть крупнее, с большим межстрочным и мягким
+   * начертанием. Oswald здесь не годится — он узкий и «плакатный», для
+   * названия события нужен спокойный гротеск. */
+  font-family: "Manrope", system-ui, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: -0.005em;
 }
 
 .agenda-actions {
@@ -188,38 +224,105 @@
   transform: scale(0.9);
 }
 
-/* Правка времени прямо в карточке. Появляется под содержимым и не сдвигает
- * соседние карточки рывком: высота анимируется вместе с прозрачностью. */
+/* Правка времени прямо в карточке: прокрутка часов и минут. */
 .agenda-card {
   flex-wrap: wrap;
 }
 
-.agenda-time-edit {
+/* Колесо времени: пять видимых чисел, выбранное — в центре под полосой. */
+.wheel-picker {
   flex-basis: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid var(--line);
   animation: agenda-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-.agenda-time-edit input[type="time"] {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--display);
-  font-size: 20px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text);
+.wheel-frame {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--soft);
+  touch-action: none;
+  user-select: none;
 }
 
-.agenda-time-save,
-.agenda-time-cancel {
-  padding: 8px 12px;
+/* Полоса-указатель: показывает, какое число считается выбранным. */
+.wheel-marker {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  top: 50%;
+  height: 44px;
+  transform: translateY(-50%);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--line);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.wheel {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  height: 100%;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.wheel:active {
+  cursor: grabbing;
+}
+
+.wheel-scroll {
+  will-change: transform;
+}
+
+.wheel-item {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--display);
+  font-size: 24px;
+  font-weight: 500;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  transition:
+    color 140ms ease,
+    opacity 140ms ease;
+}
+
+.wheel-item[data-active="true"] {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.wheel-colon {
+  position: relative;
+  z-index: 1;
+  padding: 0 2px;
+  font-family: var(--display);
+  font-size: 22px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.wheel-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.wheel-done,
+.wheel-cancel {
+  flex: 1;
+  padding: 10px 12px;
   border-radius: 12px;
   font-size: 14px;
   font-weight: 700;
@@ -229,20 +332,20 @@
     transform 120ms ease;
 }
 
-.agenda-time-save {
+.wheel-done {
   border: 0;
   background: var(--event-color, #182b32);
   color: #fff;
 }
 
-.agenda-time-cancel {
+.wheel-cancel {
   border: 1px solid var(--line);
   background: transparent;
   color: var(--muted);
 }
 
-.agenda-time-save:active,
-.agenda-time-cancel:active {
+.wheel-done:active,
+.wheel-cancel:active {
   transform: scale(0.96);
 }
 
@@ -257,7 +360,8 @@
   width: 100%;
   box-sizing: border-box;
   height: 56px;
-  margin-top: 24px;
+  /* Стоит сразу под датой, до списка карточек. */
+  margin: 12px 0 4px;
   padding: 4px;
   border-radius: 999px;
   border: 1px solid var(--line);

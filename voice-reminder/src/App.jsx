@@ -66,6 +66,7 @@ import EventModal from "./components/EventModal.jsx";
 import DeleteGroupModal from "./components/DeleteGroupModal.jsx";
 import ScopeModal from "./components/ScopeModal.jsx";
 import SwipeToDelete from "./components/SwipeToDelete.jsx";
+import WheelPicker from "./components/WheelPicker.jsx";
 import AccessModal from "./components/AccessModal.jsx";
 import {
   ruleOccurrenceCount,
@@ -106,7 +107,11 @@ export default function App() {
     [clearingDay, setClearingDay] = useState(false),
     // Какая карточка сейчас правит время и что в ней введено.
     [editingTime, setEditingTime] = useState(null),
-    [timeEdits, setTimeEdits] = useState({});
+    [timeEdits, setTimeEdits] = useState({}),
+    // Поле ввода в фокусе: подсказка на это время скрывается.
+    [editorFocused, setEditorFocused] = useState(false),
+    // Карточки, которые сейчас уезжают вправо после удаления.
+    [removing, setRemoving] = useState([]);
   const recording = useRef(),
     draftRef = useRef(draft),
     editorRef = useRef(null),
@@ -448,13 +453,22 @@ export default function App() {
    * Для правила на несколько дат «удалить» напоминание целиком было бы
    * слишком грубо: человек убирает карточку одного дня. Остальные даты
    * остаются, а убранная попадает в исключения расписания.
+   *
+   * Сначала карточка уезжает вправо, и только потом исчезает из списка.
+   * Удаление без анимации выглядит как рывок: карточка пропадает мгновенно,
+   * и непонятно, что именно удалилось.
    */
   async function removeOne(entry) {
+    setRemoving((v) => [...v, entry.id]);
+    playUiSound("delete", { enabled: settings.uiSounds !== false });
+    await new Promise((r) => setTimeout(r, 280));
     try {
       setState(await skipOccurrence(entry.reminderId, entry.at));
       setMessage("");
     } catch (e) {
       setMessage(e.message);
+    } finally {
+      setRemoving((v) => v.filter((id) => id !== entry.id));
     }
   }
   /**
@@ -526,7 +540,11 @@ export default function App() {
     const targets = entries.filter((e) => e.date === date);
     if (!targets.length) return;
     setClearingDay(true);
+    // Карточки уезжают вправо все сразу: так видно, что удаляется именно
+    // весь день, а не одна строка.
+    setRemoving(targets.map((e) => e.id));
     playUiSound("delete", { enabled: settings.uiSounds !== false });
+    await new Promise((r) => setTimeout(r, 300));
     try {
       // Каждый шаг берёт состояние, полученное предыдущим. Если читать
       // исходное состояние, шаги перезапишут друг друга и сохранится
@@ -548,10 +566,12 @@ export default function App() {
       setMessage(e.message);
     } finally {
       setClearingDay(false);
+      setRemoving([]);
     }
   }
   async function persist(r) {
-    let token;    try {
+    let token;
+    try {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
       const s = await putReminder(r, {
         reservation: token,
@@ -743,7 +763,19 @@ export default function App() {
                 readOnly={voiceActive || busy}
                 spellCheck="true"
                 style={editorFont ? { fontSize: editorFont + "px" } : undefined}
-                placeholder="Нажмите «Начать». Назовите время и событие, например: «в семь утра полить цветы». Даты отметьте на календаре, затем нажмите «Готово». Если дату не отметили, напоминание встанет на сегодня."
+                // Подсказка исчезает, как только человек коснулся поля.
+                //
+                // Иначе она мешает: текст подсказки виден, пока поле пустое,
+                // и человек начинает печатать поверх него — непонятно, стёр
+                // он подсказку или она часть напоминания. Убираем при фокусе
+                // и не возвращаем до конца ввода.
+                placeholder={
+                  editorFocused
+                    ? ""
+                    : "Нажмите «Начать». Назовите время и событие, например: «в семь утра полить цветы». Даты отметьте на календаре, затем нажмите «Готово». Если дату не отметили, напоминание встанет на сегодня."
+                }
+                onFocus={() => setEditorFocused(true)}
+                onBlur={() => setEditorFocused(false)}
                 onChange={(e) => typePhrase(e.target.value)}
               />
             </section>
@@ -783,7 +815,7 @@ export default function App() {
         )}
         {tab === "events" && (
           <section className="agenda">
-            <header className="page-title">
+            <header className="page-title events-title">
               <h1>События</h1>
               <button
                 className="text-button back-home"
@@ -806,6 +838,16 @@ export default function App() {
                 {eventCount(shownEntries.length)}
               </strong>
             </div>
+            {/* Удаление всего дня — сразу под датой, до списка: так это
+                читается как действие над днём, а не над последней карточкой.
+                Ползунок надо довести до конца, случайно так не нажать. */}
+            {dayFilter && shownEntries.length > 0 && (
+              <SwipeToDelete
+                label="Удалить все!"
+                busy={clearingDay}
+                onConfirm={() => clearDay(dayFilter)}
+              />
+            )}
             {!shownEntries.length && (
               <div className="empty-agenda">
                 <Icon name="bell" size={32} />
@@ -828,7 +870,9 @@ export default function App() {
                     <article
                       key={e.id}
                       className={
-                        "agenda-card" + (past ? " past" : "") + " is-new"
+                        "agenda-card" +
+                        (past ? " past" : "") +
+                        (removing.includes(e.id) ? " is-leaving" : "")
                       }
                       style={eventCardStyle(e.color)}
                     >
@@ -905,49 +949,24 @@ export default function App() {
                           <Icon name="edit" size={18} />
                         </button>
                       </div>
-                      {/* Правка времени прямо в карточке: без окна и без
-                          ухода с экрана. Поле появляется плавно. */}
+                      {/* Правка времени прямо в карточке: прокрутка часов и
+                          минут. Без ухода с экрана — человек видит, к какому
+                          дню относится время. */}
                       {editingTime === e.id && (
-                        <div className="agenda-time-edit">
-                          <input
-                            type="time"
-                            value={timeEdits[e.id] || e.time}
-                            aria-label="Новое время"
-                            onChange={(ev) =>
-                              setTimeEdits((v) => ({
-                                ...v,
-                                [e.id]: ev.target.value,
-                              }))
-                            }
-                          />
-                          <button
-                            className="agenda-time-save"
-                            onClick={() => changeTimeOne(e, rule)}
-                          >
-                            Сохранить
-                          </button>
-                          <button
-                            className="agenda-time-cancel"
-                            onClick={() => setEditingTime(null)}
-                          >
-                            Отмена
-                          </button>
-                        </div>
+                        <WheelPicker
+                          value={timeEdits[e.id] || e.time}
+                          soundEnabled={settings.uiSounds !== false}
+                          onChange={(v) =>
+                            setTimeEdits((prev) => ({ ...prev, [e.id]: v }))
+                          }
+                          onDone={() => changeTimeOne(e, rule)}
+                          onCancel={() => setEditingTime(null)}
+                        />
                       )}
                     </article>
                   );
                 })}
               </div>
-            )}
-            {/* Слайдер намеренно внизу и отдельно от карточек: удаление всех
-                напоминаний дня необратимо, поэтому жест отличается от
-                обычного нажатия. */}
-            {dayFilter && shownEntries.length > 0 && (
-              <SwipeToDelete
-                label="Удалить все!"
-                busy={clearingDay}
-                onConfirm={() => clearDay(dayFilter)}
-              />
             )}
           </section>
         )}

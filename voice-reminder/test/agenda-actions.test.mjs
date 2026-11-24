@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
@@ -56,7 +56,7 @@ test("правило без расписания не ломает разбор"
 // --- Звуки интерфейса ---
 
 test("звуки действий объявлены", () => {
-  assert.deepEqual(UI_SOUNDS.sort(), ["confirm", "delete", "edit", "toggle"]);
+  assert.deepEqual(UI_SOUNDS.sort(), ["confirm", "delete", "edit", "tick", "toggle"]);
 });
 
 test("проигрывание звука без браузера не падает", () => {
