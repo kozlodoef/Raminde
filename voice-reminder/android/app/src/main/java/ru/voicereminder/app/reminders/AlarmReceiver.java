@@ -4,9 +4,20 @@ import android.app.*;
 import android.os.Build;
 import org.json.*;
 public class AlarmReceiver extends BroadcastReceiver {
- @Override public void onReceive(Context c,Intent intent){String action=intent.getAction();if(action==null)return;if(!action.equals(AlarmScheduler.FIRE)&&!action.equals(AlarmScheduler.RETRY)&&!action.equals(AlarmScheduler.ACK)&&!action.equals(AlarmScheduler.SNOOZE))return;
+ @Override public void onReceive(Context c,Intent intent){String action=intent.getAction();if(action==null)return;if(!action.equals(AlarmScheduler.FIRE)&&!action.equals(AlarmScheduler.RETRY)&&!action.equals(AlarmScheduler.ACK)&&!action.equals(AlarmScheduler.SNOOZE)&&!action.equals(AlarmScheduler.DISMISS))return;
  String id=intent.getStringExtra("id");if(id==null)return;
  try(ReminderStore db=new ReminderStore(c)){
+  // Смахивание уведомления = «услышал».
+  //
+  // Подтверждаем активное напоминание в любом из его «живых» состояний:
+  // ringing — только что сработало, waiting — уже прозвучало и ждёт реакции,
+  // snoozed — отложено и снова ждёт. Если человек уже подтвердил вручную,
+  // состояние не трогаем.
+  if(action.equals(AlarmScheduler.DISMISS)){
+   JSONObject e=db.event(id);
+   if(e!=null&&java.util.Arrays.asList("ringing","waiting","snoozed").contains(e.optString("state")))ack(c,db,id,"dismiss");
+   return;
+  }
   if(action.equals(AlarmScheduler.ACK)){ack(c,db,id,"notification");return;}if(action.equals(AlarmScheduler.SNOOZE)){snooze(c,db,id,5);return;}
   JSONObject event;
   if(action.equals(AlarmScheduler.FIRE)){JSONObject r=db.rule(id);if(r==null||!r.optBoolean("enabled",true))return;long scheduled=r.optLong("nextTriggerAt",0);if(scheduled<=0||scheduled>System.currentTimeMillis()+1000)return;String eid=id+"@"+scheduled;event=db.event(eid);if(event==null){event=new JSONObject().put("id",eid).put("reminderId",id).put("text",r.getString("text")).put("state","ringing").put("scheduledAt",scheduled).put("attemptCount",0);event.put("nativeId",db.put("events","eid",eid,event));}else return;
@@ -14,7 +25,13 @@ public class AlarmReceiver extends BroadcastReceiver {
   }else{event=db.event(id);if(event==null||!java.util.Arrays.asList("ringing","waiting","snoozed").contains(event.optString("state")))return;}
   event.put("state","ringing").put("attemptCount",event.optInt("attemptCount")+1).put("deliveredAt",System.currentTimeMillis());db.put("events","eid",event.getString("id"),event);
   JSONObject settings=db.meta("settings");String mode=settings.optString("mode","voiceAndNotification");
-  if(mode.equals("notification")||mode.equals("voiceAndNotification"))DeliveryService.notifyEvent(c,event,settings,false);
+  // Уведомление показывает либо сервис озвучки, либо мы — но не оба сразу.
+  //
+  // Раньше уведомление ставилось здесь, а затем сервис ставил своё служебное,
+  // и на экране блокировки появлялись два одинаковых. Теперь при озвучке
+  // единственное уведомление показывает сервис (оно же ему нужно для работы
+  // в фоне), а здесь уведомление ставится только если озвучки нет.
+  if(mode.equals("notification"))DeliveryService.notifyEvent(c,event,settings,false);
   if(!mode.equals("notification")){
    try{Intent service=new Intent(c,DeliveryService.class).putExtra("eventId",event.getString("id"));if(Build.VERSION.SDK_INT>=26)c.startForegroundService(service);else c.startService(service);}catch(Exception ex){DeliveryService.notifyEvent(c,event,settings,false);db.diagnostic("Android не разрешил фоновую озвучку: "+ex.getClass().getSimpleName());}
   }

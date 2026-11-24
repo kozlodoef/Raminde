@@ -33,7 +33,6 @@ import {
 } from "./domain/repository.js";
 import {
   localDate,
-  describe,
   shortTime,
 } from "./domain/calendar.js";
 import {
@@ -448,7 +447,14 @@ export default function App() {
       setDraft(fresh);
       setLive("");
       setCreating(false);
-      setMessage("Напоминание сохранено. " + describe(rule.schedule));
+      // При успехе ничего не показываем.
+      //
+      // Раньше здесь появлялся пузырь «Напоминание сохранено» с описанием
+      // расписания. Он ничего не сообщал: человек и так видел, что поле
+      // очистилось и напоминание ушло в список. Место на экране он занимал,
+      // и его приходилось ждать. Теперь пузырь появляется только при ошибке:
+      // не указано время, дата в прошлом, речь не распознана.
+      setMessage("");
       setEditing(null);
     } catch (e) {
       setCreating(false);
@@ -562,7 +568,7 @@ export default function App() {
                 readOnly={voiceActive || busy}
                 spellCheck="true"
                 style={editorFont ? { fontSize: editorFont + "px" } : undefined}
-                placeholder="Сообщите, о чём напомнить и во сколько. Затем выберите даты на календаре и нажмите «Готово»."
+                placeholder="Нажмите «Начать». Назовите время и событие, например: «завтра в семь утра полить цветы». Даты отметьте на календаре, затем нажмите «Готово». Если дату не назвали и не отметили, напоминание встанет на сегодня."
                 onChange={(e) => typePhrase(e.target.value)}
               />
             </section>
@@ -823,19 +829,6 @@ export default function App() {
                   </label>
                 </>
               )}
-              <Toggle
-                label="Ответ голосом"
-                description="По нажатию кнопки на экране напоминания."
-                value={settings.voiceAck}
-                onChange={(v) => setting({ voiceAck: v })}
-              />
-              <label className="field">
-                Слова подтверждения
-                <input
-                  value={settings.keywords}
-                  onChange={(e) => setting({ keywords: e.target.value })}
-                />
-              </label>
               <Toggle
                 label="Скрывать текст на блокировке"
                 value={settings.privateNotification}
