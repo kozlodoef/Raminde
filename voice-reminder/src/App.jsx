@@ -23,6 +23,7 @@ import {
   acknowledge,
   snooze,
   skipOccurrence,
+  dismissOccurrence,
   fireWeb,
   permissions,
   requestPermissions,
@@ -463,7 +464,23 @@ export default function App() {
     playUiSound("delete", { enabled: settings.uiSounds !== false });
     await new Promise((r) => setTimeout(r, 280));
     try {
-      setState(await skipOccurrence(entry.reminderId, entry.at));
+      const rule = state.reminders.find((r) => r.id === entry.reminderId);
+      // Последняя дата правила — удаляем само напоминание, а не только
+      // срабатывание. Иначе от него оставалась бы пустая запись, а у
+      // сработавшего напоминания ещё и запись о показе: карточка
+      // возвращалась на место, и удаление выглядело несработавшим.
+      // skipOccurrence сам разбирает прошедшие срабатывания: их нельзя
+      // «пропустить», только снять. Сироту (правило уже удалено, запись о
+      // показе осталась) снимаем напрямую — иначе карточка не уходила.
+      const last =
+        rule && ruleDates(rule).filter((d) => d !== entry.date).length === 0;
+      setState(
+        last
+          ? await deleteReminder(entry.reminderId)
+          : await (rule
+              ? skipOccurrence(entry.reminderId, entry.at)
+              : dismissOccurrence(entry.reminderId, entry.at)),
+      );
       setMessage("");
     } catch (e) {
       setMessage(e.message);
@@ -550,17 +567,37 @@ export default function App() {
       // исходное состояние, шаги перезапишут друг друга и сохранится
       // результат только последнего — часть напоминаний вернулась бы.
       let next = state;
+      let failed = 0;
       for (const e of targets) {
         const rule = next.reminders.find((r) => r.id === e.reminderId);
-        if (!rule) continue;
+        // Правила может не быть: запись о показе осталась после удаления.
+        // Такие карточки тоже убираем, иначе «Удалить всё» оставляло их.
+        if (!rule) {
+          try {
+            next = await dismissOccurrence(e.reminderId, e.at);
+          } catch {
+            failed++;
+          }
+          continue;
+        }
         const others = ruleDates(rule).filter((d) => d !== date);
-        next =
-          others.length > 0
-            ? await skipOccurrence(e.reminderId, e.at)
-            : await deleteReminder(e.reminderId);
+        try {
+          next =
+            others.length > 0
+              ? await skipOccurrence(e.reminderId, e.at)
+              : await deleteReminder(e.reminderId);
+        } catch {
+          // Одна неудача не должна останавливать уборку всего дня: раньше
+          // первая же ошибка прерывала цикл, и часть событий оставалась.
+          failed++;
+        }
       }
       setState(next);
-      setMessage(`Удалено напоминаний: ${targets.length}`);
+      setMessage(
+        failed
+          ? `Удалено напоминаний: ${targets.length - failed} из ${targets.length}`
+          : `Удалено напоминаний: ${targets.length}`,
+      );
       playUiSound("confirm", { enabled: settings.uiSounds !== false });
     } catch (e) {
       setMessage(e.message);
@@ -915,12 +952,15 @@ export default function App() {
                                 : "Удалить напоминание"
                             }
                             onChange={() => {
-                              if (!rule) return;
+                              // Правила может не быть: напоминание уже
+                              // удалили, а запись о показе осталась. Раньше
+                              // здесь стоял выход, и такая карточка висела
+                              // на экране навсегда — удалить её было нечем.
                               playUiSound("delete", {
                                 enabled: settings.uiSounds !== false,
                               });
-                              const scope = occurrenceScope(rule);
-                              if (!scope.ask) {
+                              const scope = rule ? occurrenceScope(rule) : null;
+                              if (!scope || !scope.ask) {
                                 removeOne(e);
                                 return;
                               }

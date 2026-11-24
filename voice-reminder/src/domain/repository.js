@@ -257,8 +257,12 @@ export async function speakName(text) {
 }
 
 export async function skipOccurrence(id, at) {
-  if (at <= Date.now())
-    throw Error("Срабатывание уже началось: подтвердите или отложите его");
+  // Уже наступившее срабатывание исключить нельзя: оно либо ещё звучит, и
+  // его надо подтвердить или отложить, либо прошло. Раньше здесь бросалась
+  // ошибка, и удаление сработавшего напоминания молча не происходило —
+  // карточка оставалась на месте. Разделяем случаи: «снять прошедшее» —
+  // это dismissOccurrence, а не пропуск будущего.
+  if (at <= Date.now()) return dismissOccurrence(id, at);
   if (isNative()) return Native.skip({ id, at });
   const s = readWeb(),
     r = s.reminders.find((v) => v.id === id);
@@ -271,6 +275,42 @@ export async function skipOccurrence(id, at) {
     ? nextOccurrences(r.schedule, Date.now(), 1)[0] || null
     : null;
   if (!r.nextTriggerAt) r.enabled = false;
+  return saveWeb(s);
+}
+/**
+ * Убирает уже наступившее срабатывание.
+ *
+ * Прошедшее или звучащее срабатывание нельзя «пропустить» — его можно только
+ * снять: запись о нём удаляется, чтобы карточка не появлялась снова, а у
+ * правила исключается этот момент. Так удаление сработавшего напоминания
+ * действительно удаляет его.
+ *
+ * Правила может уже не быть — например, его удалили, а запись о показе
+ * осталась. Тогда снимаем только саму запись: раньше такая карточка
+ * оставалась на экране навсегда, и удалить её было нечем.
+ *
+ * Если у правила больше не остаётся будущих срабатываний, правило
+ * отключается: иначе оно висело бы в списке без дат.
+ */
+export async function dismissOccurrence(id, at) {
+  if (isNative()) return Native.dismiss({ id, at });
+  const s = readWeb(),
+    r = s.reminders.find((v) => v.id === id);
+  s.events = s.events.filter(
+    (e) => !(e.reminderId === id && (at === undefined || e.scheduledAt === at)),
+  );
+  if (r) {
+    r.schedule = {
+      ...r.schedule,
+      excludedInstants: [
+        ...new Set([...(r.schedule.excludedInstants || []), at]),
+      ],
+    };
+    r.nextTriggerAt = r.enabled
+      ? nextOccurrences(r.schedule, Date.now(), 1)[0] || null
+      : null;
+    if (!r.nextTriggerAt) r.enabled = false;
+  }
   return saveWeb(s);
 }
 export async function skipNext(reminder) {
