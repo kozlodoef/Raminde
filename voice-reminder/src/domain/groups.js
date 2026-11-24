@@ -114,6 +114,56 @@ const hourClause = new RegExp(
 // Окончание задаём явным классом: \w в JavaScript не включает кириллицу,
 // и «кажд\w*» не поймало бы «каждые».
 const countingBefore = /(?:через|кажд[а-яё]*|раз\s+в)\s*$/iu;
+
+// Минуты словом без «минут» сразу после круглого часа: «в 16:00 тридцать»,
+// «в шестнадцать тридцать», «в 17:00 двадцать пять». Распознаватель часто
+// отдаёт час и минуты раздельно. Только слова (не цифры — голое число после
+// часа может быть днём месяца: «в 16 25 мая»). Правило такое же, как в
+// timeParser: слово-минуты признаётся в конце фразы, с «минут» или перед
+// глаголом действия; за количеством идёт существительное («в 8 два хлеба»),
+// и такое слово не трогаем.
+const BARE_MINUTE =
+  "(?:(?:двадцать|тридцать|сорок|пятьдесят)(?:\\s+(?:один|одна|одно|два|две|три|четыре|пять|шесть|семь|восемь|девять))?|" +
+  Object.keys(numbers)
+    .filter((k) => !/^(двадцать|тридцать|сорок|пятьдесят)$/.test(k))
+    .sort((a, b) => b.length - a.length)
+    .join("|") +
+  ")";
+const BARE_MINUTE_RE = new RegExp(
+  "^(?:\\s+)?(" +
+    BARE_MINUTE +
+    ")(?!\\p{Ll})(?:\\s+минут[а-яё]*)?(?:\\s+(\\p{Ll}[а-яё-]*))?",
+  "u",
+);
+const VERB_AFTER = /(?:[а-яёы]ть|сти)$/;
+function bareMinuteValue(text) {
+  const k = String(text).toLowerCase().replaceAll("ё", "е").trim();
+  const parts = k.split(/\s+/);
+  const tens = { двадцать: 20, тридцать: 30, сорок: 40, пятьдесят: 50 };
+  if (parts.length === 2 && tens[parts[0]] !== undefined) {
+    const u = numbers[parts[1]];
+    return u !== undefined ? tens[parts[0]] + u : null;
+  }
+  if (parts.length === 1) return numbers[parts[0]] ?? null;
+  return null;
+}
+// Слово минут после круглого часа в уже найденном времени: если подходит —
+// возвращает новые минуты и длину хвоста, который нужно вырезать из фразы.
+function bareMinutesAfter(time, tail) {
+  if (!time.endsWith(":00")) return null;
+  const m = tail.match(BARE_MINUTE_RE);
+  if (!m) return null;
+  const val = bareMinuteValue(m[1]);
+  if (val === null || val > 59) return null;
+  const next = m[2] || null;
+  if (next !== null && !VERB_AFTER.test(next)) return null;
+  const wordStart = m[0].indexOf(m[1]);
+  let eat = wordStart + m[1].length;
+  const after = m[0].slice(eat);
+  const minPart = after.match(/^\s+минут[а-яё]*/);
+  if (minPart) eat += minPart[0].length;
+  return { minutes: val, eat };
+}
 /**
  * Убирает из фразы названную словами дату.
  *
@@ -225,8 +275,12 @@ function parseTime(value) {
     m = minutes;
   if (/^\d/.test(v)) {
     // «18:30» — минуты уже в записи через двоеточие, отдельные не нужны.
-    if (v.includes(":")) [h, m = 0] = v.split(":").map(Number);
-    else h = Number(v.split(/\s+/)[0]);
+    // Исключение: «16:00 тридцать минут» — у двоеточия минут нет (00), а
+    // сказаны словами: применяем их, иначе «16:00 30 минут» давало 16:00.
+    if (v.includes(":")) {
+      [h, m = 0] = v.split(":").map(Number);
+      if (m === 0 && minutes > 0) m = minutes;
+    } else h = Number(v.split(/\s+/)[0]);
   } else h = v.split(/\s+/).reduce((a, w) => a + (numbers[w] ?? NaN), 0);
   if ((marker === "вечера" || marker === "дня") && h < 12) h += 12;
   if (marker === "ночи" && h === 12) h = 0;
@@ -259,8 +313,20 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
     const parts = m[1].split(/\s*,\s*(?:в\s+)?|\s+и\s+(?:в\s+)?/u);
     const parsed = parts.map(parseTime);
     if (parsed.every(Boolean)) {
+      // «в 16:00 тридцать»: минуты словом добираем к последнему времени
+      // и расширяем диапазон, чтобы слово не осталось в тексте.
+      let length = m[0].length;
+      const last = parsed[parsed.length - 1];
+      const bm = bareMinutesAfter(
+        last,
+        normalized.slice(m.index + m[0].length),
+      );
+      if (bm) {
+        parsed[parsed.length - 1] = last.slice(0, 2) + ":" + pad(bm.minutes);
+        length += bm.eat;
+      }
       times.push(...parsed);
-      ranges.push({ index: m.index, length: m[0].length, time: parsed[0] });
+      ranges.push({ index: m.index, length, time: parsed[0] });
     }
   }
   // Обороты вида «восемнадцать часов» — без предлога. Ищем только там, где
@@ -270,10 +336,20 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
     if (countingBefore.test(normalized.slice(0, m.index))) continue;
     const before = normalized.slice(0, m.index);
     if (/(?<!\p{L})в\s*$/iu.test(before)) continue;
-    const time = parseTime(m[1]);
+    let time = parseTime(m[1]);
     if (!time) continue;
+    // «восемнадцать часов тридцать» — то же правило, что и в «в …».
+    let length = m[0].length;
+    const bm = bareMinutesAfter(
+      time,
+      normalized.slice(m.index + m[0].length),
+    );
+    if (bm) {
+      time = time.slice(0, 2) + ":" + pad(bm.minutes);
+      length += bm.eat;
+    }
     times.push(time);
-    ranges.push({ index: m.index, length: m[0].length, time });
+    ranges.push({ index: m.index, length, time });
   }
   // Замены идут с конца строки, поэтому диапазоны должны быть в порядке
   // возрастания позиции: два прохода поиска выше дают их вперемешку.

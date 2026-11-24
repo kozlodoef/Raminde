@@ -301,6 +301,30 @@ export function toDigits(phrase, parsed, now = new Date()) {
     },
   );
 
+  // --- 2а. Минуты словами после круглого часа: «в 16:00 тридцать» → «в 16:30» ---
+  // Распознаватель часто отдаёт «16:00 тридцать»: минуты уехали в текст,
+  // а в поле человек видел «16:00» и сомневался. Парсер (timeParser) такие
+  // минуты уже подхватывает, поэтому показываем то же, что сохранится.
+  // Только для круглого часа, и только когда за словом конец фразы, «минут»
+  // или глагол действия: «16:00 тридцать человек» — это количество, не минуты.
+  out = out.replace(
+    new RegExp(
+      '(\\d{1,2}):00\\s+(' +
+        NUMBER_WORD +
+        ')(?!\\p{Ll})(?:\\s+минут[а-яё]*)?(?:\\s+(\\p{Ll}[а-яё-]*))?',
+      'giu',
+    ),
+    (full, h, minText, nextWord) => {
+      const next = nextWord || null;
+      if (next !== null && !/(?:[а-яёы]ть|сти)$/.test(next)) return full;
+      const minutes = wordToNumber(minText);
+      if (minutes === null || minutes > 59) return full;
+      // «минут» после слова убираем, а всё, что дальше, сохраняем.
+      const rest = full.slice(full.indexOf(minText) + minText.length);
+      return h + ':' + pad2(minutes) + rest.replace(/^\s+минут[а-яё]*/, '');
+    },
+  );
+
   // --- 3. Относительные дни: завтра / послезавтра / сегодня ---
   const dayWords = [
     { re: /(?<!\p{L})послезавтра(?!\p{L})/giu, shift: 2 },
