@@ -1,4 +1,4 @@
-import { parseGroup, dropDateWords } from "./groups.js";
+import { parseGroup, dropDateWords, spokenDateKind } from "./groups.js";
 import { toDigits } from "./phrase-digits.js";
 import { spokenDate, stripDate } from "./dates-spoken.js";
 
@@ -56,6 +56,11 @@ export function parseEditor(phrase, current, now = new Date(), options = {}) {
         dates: current.selectedDates || [],
         times: rest.times || [],
       },
+      // Запоминаем, какое слово даты человек произнёс. Дату из него не
+      // берём — день выбирается на календаре, — но при сохранении скажем,
+      // что записали на сегодня. Иначе «завтра полить цветы» молча встало
+      // бы на сегодня, а человек ждал бы завтра.
+      spokenDateWord: spokenDateKind(phrase),
       id: current.id,
       color: current.color,
     };
