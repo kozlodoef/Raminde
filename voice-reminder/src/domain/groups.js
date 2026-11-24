@@ -9,6 +9,18 @@ import {
   pad,
 } from "./calendar.js";
 import { parseIntent } from "./intent.js";
+import {
+  parseClockText,
+  minutesAfterHour,
+  formatClock,
+  daypartIn,
+  applyDaypart,
+  daypartClock,
+  DAYPARTS as LEX_DAYPARTS,
+  CLOCK_SRC,
+  BEZ_SRC,
+  NUM_SRC,
+} from "./time-lexicon.js";
 export const COLORS = [
   "#146ad4",
   "#7854b9",
@@ -69,21 +81,13 @@ const numSource =
   Object.keys(numbers).join("|") +
   ")";
 // Названия частей дня, которые люди произносят вместо часа: «напомни в
-// обед». Без них время не распознавалось, «обед» попадал в текст
-// напоминания, а время оставалось пустым.
-const DAYPARTS = { обед: "13:00", полдень: "12:00", полночь: "00:00" };
+// обед». Определение — в лексиконе, здесь только чтение.
+const DAYPARTS = LEX_DAYPARTS;
 const daypartSource = Object.keys(DAYPARTS).join("|");
-const term =
-  "(?:" +
-  daypartSource +
-  "|" +
-  numSource +
-  "(?:\\s+час(?:а|ов)?)?" +
-  "(?:\\s+" +
-  numSource +
-  "\\s+минут[а-яё]*)?" +
-  "(?:\\s+(?:утра|вечера|дня|ночи))?" +
-  ")";
+// Как выглядит время — берём из лексикона (CLOCK_SRC). Раньше здесь был свой
+// шаблон, из-за чего формы расходились: «10 30» понималось в одном модуле и
+// не понималось в другом.
+const term = CLOCK_SRC;
 const timeClause = new RegExp(
   "(?<!\\p{L})в\\s+(" +
     term +
@@ -92,21 +96,19 @@ const timeClause = new RegExp(
     ")*)(?!\\p{L}|\\d)",
   "giu",
 );
-// Время часто называют без предлога: «восемнадцать часов полить цветы».
-// Раньше такое время не находилось, слово «часов» попадало в текст, а
-// напоминание переспрашивало «Во сколько?».
+// Время часто называют без предлога: «восемнадцать часов полить цветы»,
+// «без четверти шесть позвонить». Раньше такие обороты не находились, слова
+// времени попадали в текст, а напоминание переспрашивало «Во сколько?».
 //
-// Берём только оборот с явным словом «час»: без него под правило попадали бы
-// любые числа («купить 2 хлеба» превратилось бы в напоминание на 02:00).
+// Берём обороты с явным признаком времени — слово «час» или «без»: без них
+// под правило попадали бы любые числа («купить 2 хлеба» стало бы 02:00).
 const hourClause = new RegExp(
-  "(?<!\\p{L})(" +
-    numSource +
-    "\\s+час(?:а|ов)?" +
-    "(?:\\s+" +
-    numSource +
-    "\\s+минут[а-яё]*)?" +
-    "(?:\\s+(?:утра|вечера|дня|ночи))?" +
-    ")(?!\\p{L}|\\d)",
+  "(?<!\\p{L})((?:" +
+    BEZ_SRC +
+    "|" +
+    NUM_SRC +
+    "\\s+час[а-яё]*(?:\\s+" + CLOCK_SRC + ")?" +
+    "))(?!\\p{L}|\\d)",
   "giu",
 );
 // «через два часа» и «каждые два часа» — это не время суток, а отсчёт или
@@ -115,54 +117,14 @@ const hourClause = new RegExp(
 // и «кажд\w*» не поймало бы «каждые».
 const countingBefore = /(?:через|кажд[а-яё]*|раз\s+в)\s*$/iu;
 
-// Минуты словом без «минут» сразу после круглого часа: «в 16:00 тридцать»,
-// «в шестнадцать тридцать», «в 17:00 двадцать пять». Распознаватель часто
-// отдаёт час и минуты раздельно. Только слова (не цифры — голое число после
-// часа может быть днём месяца: «в 16 25 мая»). Правило такое же, как в
-// timeParser: слово-минуты признаётся в конце фразы, с «минут» или перед
-// глаголом действия; за количеством идёт существительное («в 8 два хлеба»),
-// и такое слово не трогаем.
-const BARE_MINUTE =
-  "(?:(?:двадцать|тридцать|сорок|пятьдесят)(?:\\s+(?:один|одна|одно|два|две|три|четыре|пять|шесть|семь|восемь|девять))?|" +
-  Object.keys(numbers)
-    .filter((k) => !/^(двадцать|тридцать|сорок|пятьдесят)$/.test(k))
-    .sort((a, b) => b.length - a.length)
-    .join("|") +
-  ")";
-const BARE_MINUTE_RE = new RegExp(
-  "^(?:\\s+)?(" +
-    BARE_MINUTE +
-    ")(?!\\p{Ll})(?:\\s+минут[а-яё]*)?(?:\\s+(\\p{Ll}[а-яё-]*))?",
-  "u",
-);
-const VERB_AFTER = /(?:[а-яёы]ть|сти)$/;
-function bareMinuteValue(text) {
-  const k = String(text).toLowerCase().replaceAll("ё", "е").trim();
-  const parts = k.split(/\s+/);
-  const tens = { двадцать: 20, тридцать: 30, сорок: 40, пятьдесят: 50 };
-  if (parts.length === 2 && tens[parts[0]] !== undefined) {
-    const u = numbers[parts[1]];
-    return u !== undefined ? tens[parts[0]] + u : null;
-  }
-  if (parts.length === 1) return numbers[parts[0]] ?? null;
-  return null;
-}
-// Слово минут после круглого часа в уже найденном времени: если подходит —
-// возвращает новые минуты и длину хвоста, который нужно вырезать из фразы.
+// Минуты сразу после часа — общее правило из лексикона: слово или цифры,
+// но с оглядкой на дату («в 16 25 мая») и на количество («в 8 два хлеба»).
+// Возвращает новые минуты и длину хвоста, который нужно вырезать из фразы.
 function bareMinutesAfter(time, tail) {
   if (!time.endsWith(":00")) return null;
-  const m = tail.match(BARE_MINUTE_RE);
-  if (!m) return null;
-  const val = bareMinuteValue(m[1]);
-  if (val === null || val > 59) return null;
-  const next = m[2] || null;
-  if (next !== null && !VERB_AFTER.test(next)) return null;
-  const wordStart = m[0].indexOf(m[1]);
-  let eat = wordStart + m[1].length;
-  const after = m[0].slice(eat);
-  const minPart = after.match(/^\s+минут[а-яё]*/);
-  if (minPart) eat += minPart[0].length;
-  return { minutes: val, eat };
+  const r = minutesAfterHour(tail);
+  if (!r) return null;
+  return { minutes: r.minutes, eat: r.eat };
 }
 /**
  * Убирает из фразы названную словами дату.
@@ -222,8 +184,18 @@ export function dropDateWords(phrase) {
       " ",
     )
     .replace(
-      // «25.12», «25/12/2026»
-      new RegExp("(?<![\\d./])\\d{1,2}[./]\\d{1,2}(?:[./]\\d{2,4})?(?![\\d./])", "gu"),
+      // «25.12», «25/12/2026». Но НЕ «10.30»: вторая часть больше 12 —
+      // это время (10:30), а не дата. Раньше оно удалялось как дата, и
+      // разбирать становилось нечего.
+      //
+      // И не «25.» / «25.1»: это ещё не дата, а незаконченный набор. Раньше
+      // такие огрызки удалялись, и текст рассыпался прямо под руками.
+      // Поэтому месяц требуем двузначным — «25.12»; именно в таком виде дату
+      // и пишет само приложение, а «25.1» человек ещё дописывает.
+      new RegExp(
+        "(?<![\\d./])\\d{1,2}[./](?:0[1-9]|1[0-2])(?:[./]\\d{2,4})?(?![\\d./])",
+        "gu",
+      ),
       " ",
     )
     .replace(
@@ -255,10 +227,14 @@ export function dropDateWords(phrase) {
     // Предлог «в» перед временем не трогаем: он принадлежит времени
     // («в 07:00 полить цветы»), а не убранной дате.
     .replace(/\s+/g, " ")
-    .replace(/^[\s,;:-]+|[\s,;:-]+$/g, "")
+    .replace(/^[\s,;]+|[\s,;]+$/g, "")
     .trim();
   if (!core) return phrase; // фраза из одних пробелов остаётся как была
-  return leading + core + trailing;
+  // Двоеточие в конце не срезаем: человек набирает «в 10:30» и уже поставил
+  // его. Раньше знак пропадал, и следующая цифра вставала на его место —
+  // получалось «в 1030».
+  const tail = trailing.endsWith(":") || core.endsWith(":") ? trailing : trailing.replace(/[:\-]+$/, "");
+  return leading + core + tail;
 }
 /**
  * Какое слово даты прозвучало: «сегодня», «завтра», «послезавтра».
@@ -281,44 +257,25 @@ export function spokenDateKind(phrase) {
   if (/(?<!\p{L})сегодня(?!\p{L})/u.test(p)) return "today";
   return null;
 }
-function parseTime(value) {
-  value = value.toLowerCase().replaceAll("ё", "е");
-  // «в обед» / «в полдень» / «в полночь» — сразу известное время.
-  const part = value.trim().match(new RegExp("^(" + daypartSource + ")$", "u"));
-  if (part) return DAYPARTS[part[1]];
-  const marker = value.match(/утра|вечера|дня|ночи/u)?.[0];
-  // Минуты: «девятнадцать часов тридцать минут», «18 часов 30 минут».
-  // Отрезаем их до разбора часа, иначе они попали бы в сумму и дали не то
-  // время — «19 часов 30 минут» превращалось бы в 49:00.
-  let minutes = 0;
-  const minutePart = value.match(
-    new RegExp(
-      "(\\d{1,2}|" + Object.keys(numbers).join("|") + ")\\s*минут[а-яё]*",
-      "iu",
-    ),
-  );
-  if (minutePart) {
-    const raw = minutePart[1];
-    minutes = /^\d+$/.test(raw)
-      ? Number(raw)
-      : raw.split(/\s+/).reduce((a, w) => a + (numbers[w] ?? NaN), 0);
-    value = value.replace(minutePart[0], " ");
-  }
-  const v = value.replace(/утра|вечера|дня|ночи|час(?:а|ов)?/gu, "").trim();
-  let h,
-    m = minutes;
-  if (/^\d/.test(v)) {
-    // «18:30» — минуты уже в записи через двоеточие, отдельные не нужны.
-    // Исключение: «16:00 тридцать минут» — у двоеточия минут нет (00), а
-    // сказаны словами: применяем их, иначе «16:00 30 минут» давало 16:00.
-    if (v.includes(":")) {
-      [h, m = 0] = v.split(":").map(Number);
-      if (m === 0 && minutes > 0) m = minutes;
-    } else h = Number(v.split(/\s+/)[0]);
-  } else h = v.split(/\s+/).reduce((a, w) => a + (numbers[w] ?? NaN), 0);
-  if ((marker === "вечера" || marker === "дня") && h < 12) h += 12;
-  if (marker === "ночи" && h === 12) h = 0;
-  return h >= 0 && h < 24 && m >= 0 && m < 60 ? pad(h) + ":" + pad(m) : null;
+/**
+ * Разбирает вырезанную из фразы «порцию» времени в «ЧЧ:ММ».
+ *
+ * Вся работа — в лексиконе (parseClockText): он знает цифры, точку, пробел,
+ * слова, «часов»/«минут», дроби и «без N …». Здесь только часть суток —
+ * она меняет час, поэтому применяется после разбора.
+ */
+function parseTime(value, neighbours = "") {
+  const text = String(value || "").toLowerCase().replaceAll("ё", "е").trim();
+  // «обед», «полдень», «полночь» — сразу известное время. «Обед» берём
+  // только когда рядом нет другой части суток: «днём обед» — это еда.
+  const direct = daypartClock(text, neighbours);
+  if (direct) return direct;
+  if (DAYPARTS[text]) return null;
+  const c = parseClockText(text, neighbours);
+  if (!c) return null;
+  const part = daypartIn(text);
+  const hour = part ? applyDaypart(c.hour, part) : c.hour;
+  return formatClock(hour, c.minute);
 }
 /**
  * Разбирает сказанную фразу в напоминание.
@@ -345,7 +302,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
     ranges = [];
   for (const m of normalized.matchAll(timeClause)) {
     const parts = m[1].split(/\s*,\s*(?:в\s+)?|\s+и\s+(?:в\s+)?/u);
-    const parsed = parts.map(parseTime);
+    const parsed = parts.map((p) => parseTime(p, normalized));
     if (parsed.every(Boolean)) {
       // «в 16:00 тридцать»: минуты словом добираем к последнему времени
       // и расширяем диапазон, чтобы слово не осталось в тексте.
@@ -370,7 +327,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
     if (countingBefore.test(normalized.slice(0, m.index))) continue;
     const before = normalized.slice(0, m.index);
     if (/(?<!\p{L})в\s*$/iu.test(before)) continue;
-    let time = parseTime(m[1]);
+    let time = parseTime(m[1], normalized);
     if (!time) continue;
     // «восемнадцать часов тридцать» — то же правило, что и в «в …».
     let length = m[0].length;
