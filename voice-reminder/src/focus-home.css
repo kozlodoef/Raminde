@@ -117,6 +117,20 @@
 .focus-editor:focus-within {
   box-shadow: inset 0 0 0 2px #7ed8f6;
 }
+/* Тихая строка под полем: пояснение, а не сбой.
+   Пузырь поверх экрана бережём для ошибок — здесь ничего не сломалось,
+   человеку просто нужно знать, на какую дату записали напоминание. */
+.editor-note {
+  margin: 10px 2px 0;
+  font-size: 14px;
+  line-height: 1.5;
+  color: #5d7683;
+  text-align: center;
+  animation: bubble-appear 0.2s ease-out;
+}
+:root[data-theme="dark"] .editor-note {
+  color: #9fb6c1;
+}
 .focus-record {
   flex: 0 0 54px;
   border: 1px solid #192e36;

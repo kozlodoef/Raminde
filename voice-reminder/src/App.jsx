@@ -92,7 +92,11 @@ export default function App() {
     [creating, setCreating] = useState(false),
     [voice, setVoice] = useState("idle"),
     [live, setLive] = useState(""),
+    // message — только про сбой: он всплывает пузырём поверх экрана.
     [message, setMessage] = useState(""),
+    // note — спокойное пояснение под полем ввода. Пузыря не заслуживает:
+    // ничего не сломалось, человеку просто нужно знать, на какую дату записали.
+    [note, setNote] = useState(""),
     [busy, setBusy] = useState(false),
     [modal, setModal] = useState(null),
     [perms, setPerms] = useState(null),
@@ -143,6 +147,11 @@ export default function App() {
     const timer = setTimeout(() => setMessage(""), 8000);
     return () => clearTimeout(timer);
   }, [message]);
+  useEffect(() => {
+    if (!note) return;
+    const timer = setTimeout(() => setNote(""), 6000);
+    return () => clearTimeout(timer);
+  }, [note]);
   useEffect(() => {
     localStorage.setItem("raminde.drafts.v3", JSON.stringify({ draft }));
   }, [draft]);
@@ -351,6 +360,7 @@ export default function App() {
     setLive(phrase);
     setCreating(!!phrase.trim());
     setMessage("");
+    setNote("");
     if (parseTimer.current) clearTimeout(parseTimer.current);
     parseTimer.current = setTimeout(() => {
       parseTimer.current = null;
@@ -445,6 +455,7 @@ export default function App() {
     setDraft(fresh);
     setCreating(false);
     setMessage("");
+    setNote("");
     setLive("");
     setEditing(null);
   }
@@ -536,7 +547,8 @@ export default function App() {
         return next;
       });
       setEditingTime(null);
-      setMessage(`Время изменено на ${time}.`);
+      // Успех виден по самой карточке — новое время уже стоит в ней.
+      setMessage("");
       playUiSound("confirm", { enabled: settings.uiSounds !== false });
     } catch (e) {
       setMessage(e.message);
@@ -593,10 +605,12 @@ export default function App() {
         }
       }
       setState(next);
+      // Успех виден по пустому дню — пузыря не показываем. А вот неполная
+      // уборка это сбой: часть напоминаний осталась, и об этом надо сказать.
       setMessage(
         failed
-          ? `Удалено напоминаний: ${targets.length - failed} из ${targets.length}`
-          : `Удалено напоминаний: ${targets.length}`,
+          ? `Не удалось удалить напоминаний: ${failed} из ${targets.length}`
+          : "",
       );
       playUiSound("confirm", { enabled: settings.uiSounds !== false });
     } catch (e) {
@@ -679,15 +693,16 @@ export default function App() {
       setDraft(fresh);
       setLive("");
       setCreating(false);
-      // При успехе обычно ничего не показываем: человек видит, что поле
-      // очистилось и напоминание ушло в список.
+      // При успехе пузыря не показываем: человек видит, что поле очистилось
+      // и напоминание ушло в список. Всплывающее сообщение — только про сбой.
       //
       // Исключение — дата. В бесплатной версии она берётся только с
       // календаря, а если её не отметили, напоминание встаёт на сегодня.
       // Молчать об этом нельзя: сказанное «завтра» осталось бы у человека
-      // в голове, а сработало бы сегодня. Поэтому сообщаем, на какой день
-      // записали, — но только когда дату не выбирали.
-      setMessage(isPro(bill) ? "" : dateNote(current));
+      // в голове, а сработало бы сегодня. Но это и не ошибка — поэтому
+      // пояснение идёт тихой строкой под полем, а не пузырём поверх экрана.
+      setNote(isPro(bill) ? "" : dateNote(current));
+      setMessage("");
       setEditing(null);
     } catch (e) {
       setCreating(false);
@@ -751,8 +766,10 @@ export default function App() {
   return (
     <main className={"planner" + (tab === "home" ? " home-screen" : "")}>
       <div className="planner-content">
+        {/* Пузырь — только про сбой: что-то не сохранилось, не удалилось,
+            нет разрешения. Подтверждения успеха и пояснения живут без него. */}
         {message && (
-          <div className="floating-bubble" role="status" aria-live="polite">
+          <div className="floating-bubble" role="alert" aria-live="assertive">
             <span>{message}</span>
             <button
               className="icon-button"
@@ -762,6 +779,13 @@ export default function App() {
               <Icon name="close" size={18} />
             </button>
           </div>
+        )}
+        {/* Тихое пояснение: на какую дату записали, что нужно разрешить.
+            Это не сбой, поэтому строкой, а не пузырём поверх экрана. */}
+        {note && (
+          <p className="editor-note" role="status">
+            {note}
+          </p>
         )}
         {tab === "home" && (
           <div className="focus-home">
@@ -1232,11 +1256,16 @@ export default function App() {
                   onClick={() =>
                     requestAutostart()
                       .then((r) =>
-                        setMessage(
-                          r?.opened
-                            ? "Разрешите автозапуск для этого приложения — иначе напоминания не восстановятся после перезагрузки телефона."
-                            : r?.hint || "Разрешите автозапуск в настройках приложения.",
-                        ),
+                        // Подсказка «разрешите автозапуск» — не сбой, а
+                        // пояснение: её место в тихой строке, не в пузыре.
+                        r?.opened
+                          ? setNote(
+                              "Разрешите автозапуск для этого приложения — иначе напоминания не восстановятся после перезагрузки телефона.",
+                            )
+                          : setNote(
+                              r?.hint ||
+                                "Разрешите автозапуск в настройках приложения.",
+                            ),
                       )
                       .catch((e) => setMessage(e.message))
                   }
@@ -1382,7 +1411,8 @@ export default function App() {
                   enabled: settings.uiSounds !== false,
                 });
                 setState(await deleteReminder(rule.id));
-                setMessage("Напоминание удалено со всех дат.");
+                // Карточки уже нет — подтверждение пузырём не нужно.
+                setMessage("");
               } else {
                 playUiSound("edit", { enabled: settings.uiSounds !== false });
                 changeTimeAll(rule);
