@@ -33,6 +33,35 @@ export const defaults = {
   uiSounds: true,
 };
 const KEY = "raminde.v2";
+/**
+ * Режимы напоминания, которые сейчас есть в приложении.
+ *
+ * «Голосом и уведомлением» — озвучка плюс уведомление.
+ * «Только уведомлением» — без озвучки.
+ *
+ * Режима «только голосом» больше нет.
+ */
+export const REMINDER_MODES = ["voiceAndNotification", "notification"];
+
+/**
+ * Приводит сохранённые настройки к нынешнему набору режимов.
+ *
+ * Режима «только голосом» больше нет в списке: без уведомления напоминание
+ * легко пропустить. Но у тех, кто успел его выбрать, в настройках лежит
+ * mode: "voice". Показывать им первый пункт списка и при этом работать
+ * по-старому нельзя: человек видел бы «Голосом и уведомлением», а уведомление
+ * не приходило бы. Поэтому значение переводится при чтении — один раз и без
+ * участия человека.
+ *
+ * Неизвестное значение (мусор в хранилище, правка руками, чужая версия)
+ * тоже приводится к первому режиму: иначе список в настройках показал бы
+ * пустое поле, и человек не понял бы, что случилось.
+ */
+export function normalizeSettings(settings) {
+  const next = { ...defaults, ...settings };
+  if (!REMINDER_MODES.includes(next.mode)) next.mode = REMINDER_MODES[0];
+  return next;
+}
 export function emptyState() {
   return {
     reminders: [],
@@ -51,7 +80,7 @@ function readWeb() {
         ...emptyState(),
         ...state,
         access: trialAccess(state.access),
-        settings: { ...defaults, ...state.settings },
+        settings: normalizeSettings(state.settings),
       };
       localStorage.setItem(KEY, JSON.stringify(merged));
       return merged;
@@ -89,7 +118,7 @@ export async function getState() {
       });
       localStorage.setItem("raminde.nativeMigrated", "yes");
     }
-    return { ...result, settings: { ...defaults, ...result.settings } };
+    return { ...result, settings: normalizeSettings(result.settings) };
   }
   return readWeb();
 }
@@ -130,7 +159,7 @@ function saveWeb(state) {
 export async function setSettings(settings) {
   if (isNative()) return Native.settings({ settings });
   const s = readWeb();
-  s.settings = { ...defaults, ...settings };
+  s.settings = normalizeSettings(settings);
   return saveWeb(s);
 }
 export async function putReminder(

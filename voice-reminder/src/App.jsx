@@ -1303,10 +1303,14 @@ export default function App() {
                   value={settings.mode}
                   onChange={(e) => setting({ mode: e.target.value })}
                 >
+                  {/* Режима «только голосом» здесь больше нет: без
+                      уведомления напоминание легко пропустить, а озвучка не
+                      оставляет следа в шторке. Сохранённое значение voice
+                      переводится в первый режим при чтении настроек — см.
+                      normalizeSettings в domain/repository.js. */}
                   <option value="voiceAndNotification">
                     Голосом и уведомлением
                   </option>
-                  <option value="voice">Голосом</option>
                   <option value="notification">Только уведомлением</option>
                 </select>
               </label>
