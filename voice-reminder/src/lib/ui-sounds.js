@@ -10,6 +10,9 @@
 // превращаются в шум.
 
 let audioCtx = null;
+// Когда последний раз звучал осмысленный отклик (удаление, подтверждение).
+// Нужен, чтобы щелчок нажатия не накладывался на него.
+let lastMeaningful = 0;
 
 function ctx() {
   if (typeof window === "undefined") return null;
@@ -60,6 +63,15 @@ const SOUNDS = {
     { freq: 660, dur: 0.1 },
     { freq: 990, dur: 0.16, delay: 0.1 },
   ],
+  // Смена месяца: лёгкий шелест вверх — «перелистнули».
+  // Два близких тона подряд читаются как движение, но не как сигнал.
+  month: [
+    { freq: 520, dur: 0.06, gain: 0.055 },
+    { freq: 700, dur: 0.08, delay: 0.05, gain: 0.05 },
+  ],
+  // Нажатие кнопки: самый короткий и тихий отклик.
+  // Нужен там, где действие не меняет ничего видимого — открыть, переключить.
+  press: [{ freq: 1040, dur: 0.028, type: "triangle", gain: 0.05 }],
 };
 
 /**
@@ -75,6 +87,11 @@ export function playUiSound(kind, { enabled = true } = {}) {
   if (!c || c.state !== "running") return;
   const notes = SOUNDS[kind];
   if (!notes) return;
+  // Щелчок нажатия не должен звучать поверх осмысленного отклика: если только
+  // что прозвучало удаление или подтверждение, лишний щелчок — просто шум.
+  if (kind === "press") {
+    if (Date.now() - lastMeaningful < 150) return;
+  } else lastMeaningful = Date.now();
   try {
     const t = c.currentTime;
     for (const n of notes)

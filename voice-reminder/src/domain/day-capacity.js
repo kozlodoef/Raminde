@@ -38,12 +38,38 @@ export function daySegments(
 function monthOf(t) {
   return localDate(new Date(t)).slice(0, 7);
 }
+/**
+ * Занятые места на каждом дне месяца.
+ *
+ * Место занимает и запланированное напоминание, и уже прозвучавшее. Второе
+ * важно отдельно: прозвучавшее можно удалить, но день от этого не
+ * освобождается. Иначе предел в три напоминания обходится в два нажатия —
+ * поставить, дождаться, удалить — и смысла в нём нет.
+ *
+ * Считаем по идентификатору срабатывания: у запланированного и у прозвучавшего
+ * одного и того же напоминания он совпадает, поэтому одно место не посчитается
+ * дважды.
+ */
+function slotsOf(rules, month, fired) {
+  const slots = new Map();
+  const take = (date, id) => {
+    if (!slots.has(date)) slots.set(date, new Set());
+    slots.get(date).add(id);
+  };
+  for (const e of occurrencesInMonth(rules, month)) take(e.date, e.id);
+  for (const date of Object.keys(fired || {}))
+    if (date.startsWith(month) && Array.isArray(fired[date]))
+      for (const id of fired[date]) take(date, id);
+  const counts = new Map();
+  for (const [date, ids] of slots) counts.set(date, ids.size);
+  return counts;
+}
 // Exact for all chosen dates/one-off reminders. Recurrences are checked for the upcoming year
 // plus any explicit dates present in the saved schedules, including dates further in the future.
 export function assertDailyCapacity(
   existing,
   candidates,
-  { events = [], now = Date.now(), maxPerDay = MAX_DAILY_EVENTS } = {},
+  { fired = {}, now = Date.now(), maxPerDay = MAX_DAILY_EVENTS } = {},
 ) {
   const enabled = candidates.filter((r) => r.enabled !== false);
   if (!enabled.length) return;
@@ -59,6 +85,15 @@ export function assertDailyCapacity(
     if (limit < MAX_DAILY_EVENTS)
       return `На ${when} уже ${count} напоминаний в день. Это предел подписки — оформите её, чтобы снять ограничение.`;
     return `На ${when} получится ${count} напоминаний. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`;
+  };
+  // Отдельное сообщение для случая, когда день закрыт прозвучавшими
+  // напоминаниями. Человек их уже удалил и ждёт, что день освободился —
+  // без объяснения он решит, что приложение сломалось.
+  const spokenMessage = (date, count) => {
+    const when = date.split("-").reverse().join(".");
+    if (limit < MAX_DAILY_EVENTS)
+      return `На ${when} уже прозвучало ${count} напоминания — это предел подписки. Удаление их день не освобождает: оформите её, чтобы ставить больше.`;
+    return `На ${when} уже прозвучало ${count} напоминаний. Максимум — ${MAX_DAILY_EVENTS} в день.`;
   };
   const months = new Set();
   let recurring = false;
@@ -88,23 +123,19 @@ export function assertDailyCapacity(
     // Сколько уже стоит на каждом дне. Отличаем «добавляю» от «правлю»:
     // правка правила на месте не увеличивает день, и предел ей мешать не
     // должен, иначе человек не смог бы поправить текст третьего напоминания.
-    const before = new Map();
-    for (const e of occurrencesInMonth(existing, month))
-      before.set(e.date, (before.get(e.date) || 0) + 1);
-    const after = new Map();
-    for (const e of occurrencesInMonth(rules, month))
-      after.set(e.date, (after.get(e.date) || 0) + 1);
-    // Срабатывания, которые уже сработали, тоже занимают место на дне.
-    for (const e of events) {
-      const date = localDate(new Date(e.scheduledAt));
-      if (date.startsWith(month))
-        after.set(date, (after.get(date) || 0) + 1);
-    }
+    const before = slotsOf(existing, month, fired);
+    const after = slotsOf(rules, month, fired);
     for (const [date, count] of after)
       // Отклоняем только когда день переполняется и его стало больше.
       // Уже сохранённые напоминания сверх предела продолжают работать:
       // ограничение касается создания, а не того, что человек успел завести.
-      if (count > limit && count > (before.get(date) || 0))
-        throw Error(limitMessage(date, count));
+      if (count > limit && count > (before.get(date) || 0)) {
+        // Если день закрыт именно прозвучавшими — говорим об этом прямо,
+        // иначе человек ищет виноватое напоминание, которого уже нет.
+        const spoken = (fired?.[date] || []).length;
+        throw Error(
+          spoken >= limit ? spokenMessage(date, spoken) : limitMessage(date, count),
+        );
+      }
   }
 }

@@ -2,9 +2,14 @@ import React, { useRef } from "react";
 import { monthBounds } from "./domain/groups.js";
 import { localDate, pad } from "./domain/calendar.js";
 import { daySegments, MAX_DAILY_EVENTS } from "./domain/day-capacity.js";
+import { playUiSound } from "./lib/ui-sounds.js";
 const label = (d) =>
   new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(
     new Date(d + "T12:00:00"),
+  );
+const monthLabel = (month) =>
+  new Intl.DateTimeFormat("ru-RU", { month: "long", year: "numeric" }).format(
+    new Date(month + "-01T12:00:00"),
   );
 function shift(month, step) {
   const [y, m] = month.split("-").map(Number),
@@ -94,12 +99,20 @@ export default function Calendar({
   occurrences,
   color,
   draftId,
+  sounds,
 }) {
   const bounds = monthBounds(month),
     today = localDate();
   const days = Array.from({ length: bounds.offset + bounds.days }, (_, i) =>
     i < bounds.offset ? null : month + "-" + pad(i - bounds.offset + 1),
   );
+  // Смена месяца — переход, а не мгновенная подмена содержимого. Звук и
+  // анимация заголовка дают понять, что лист перелистнулся, иначе на медленном
+  // телефоне кажется, что нажатие не сработало.
+  const go = (delta) => {
+    playUiSound("month", { enabled: sounds !== false });
+    onMonth(shift(month, delta));
+  };
   return (
     <section
       className="month-card"
@@ -110,20 +123,17 @@ export default function Calendar({
         <button
           className="icon-button"
           aria-label="Предыдущий месяц"
-          onClick={() => onMonth(shift(month, -1))}
+          onClick={() => go(-1)}
         >
           ‹
         </button>
-        <h2>
-          {new Intl.DateTimeFormat("ru-RU", {
-            month: "long",
-            year: "numeric",
-          }).format(new Date(month + "-01T12:00:00"))}
+        <h2 key={month} className="month-title">
+          {monthLabel(month)}
         </h2>
         <button
           className="icon-button"
           aria-label="Следующий месяц"
-          onClick={() => onMonth(shift(month, 1))}
+          onClick={() => go(1)}
         >
           ›
         </button>

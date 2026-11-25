@@ -73,6 +73,10 @@ export function emptyState() {
     reminders: [],
     settings: { ...defaults },
     events: [],
+    // Прозвучавшие напоминания по дням: { "2026-11-26": ["id@время", …] }.
+    // Живут отдельно от events: events удаляются вместе с напоминанием, а
+    // израсходованное место в дне бесплатной версии исчезать не должно.
+    fired: {},
     access: trialAccess(),
     quota: { month: localDate().slice(0, 7), used: 0, timezone: zone() },
     errors: [],
@@ -175,14 +179,14 @@ export async function putReminder(
   if (isNative()) {
     const current = await Native.getState();
     assertDailyCapacity(current.reminders || [], [reminder], {
-      events: current.events || [],
+      fired: current.fired || {},
       ...(maxPerDay ? { maxPerDay } : {}),
     });
     return Native.upsert({ reminder, reservation });
   }
   const s = readWeb();
   assertDailyCapacity(s.reminders, [reminder], {
-    events: s.events,
+    fired: s.fired || {},
     ...(maxPerDay ? { maxPerDay } : {}),
   });
   const existing = s.reminders.find((r) => r.id === reminder.id);
@@ -245,7 +249,7 @@ export async function fireWeb() {
   for (const r of s.reminders) {
     if (!r.enabled || !r.nextTriggerAt || r.nextTriggerAt > now) continue;
     const id = r.id + "@" + r.nextTriggerAt;
-    if (!s.events.some((e) => e.id === id))
+    if (!s.events.some((e) => e.id === id)) {
       s.events.push({
         id,
         reminderId: r.id,
@@ -255,6 +259,14 @@ export async function fireWeb() {
         scheduledAt: r.nextTriggerAt,
         deliveredAt: now,
       });
+      // Отмечаем место в дне сразу при срабатывании. Метка живёт в отдельном
+      // списке и переживает удаление напоминания: иначе предел обходится тем,
+      // что прозвучавшее напоминание удаляют и ставят новое.
+      const day = localDate(new Date(r.nextTriggerAt));
+      s.fired = s.fired || {};
+      if (!Array.isArray(s.fired[day])) s.fired[day] = [];
+      if (!s.fired[day].includes(id)) s.fired[day].push(id);
+    }
     r.nextTriggerAt = nextOccurrences(r.schedule, now, 1)[0] || null;
     if (!r.nextTriggerAt) r.enabled = false;
   }

@@ -103,6 +103,47 @@ test("one group at three times has three identically coloured segments", () => {
 test("24 default colours are distinct", () =>
   assert.equal(new Set(COLORS).size, 24));
 
+// --- Прозвучавшие напоминания занимают место в дне ---
+//
+// Предел в три напоминания на бесплатной версии обходился бы в два нажатия:
+// поставить напоминание, дождаться, удалить его. Поэтому место занимает не
+// только запланированное напоминание, но и прозвучавшее.
+const free = (saved, next, fired) =>
+  assertDailyCapacity(saved, [next], { fired, maxPerDay: 3 });
+
+test("прозвучавшее напоминание не освобождает день после удаления", () => {
+  // Три напоминания прозвучали, их удалили — правил не осталось, день закрыт.
+  const fired = { [day]: ["a@1", "b@2", "c@3"] };
+  assert.throws(() => free([], rule("new"), fired), /прозвучало 3/);
+});
+test("прозвучавшее напоминание считается вместе с запланированным", () => {
+  const fired = { [day]: ["a@1", "b@2"] };
+  assert.doesNotThrow(() => free([], rule("third"), fired));
+  assert.throws(() => free([], rule("third", 2), fired), /напоминаний/);
+});
+test("одно и то же напоминание не считается дважды", () => {
+  // Напоминание и запланировано, и уже прозвучало — это одно место, не два.
+  const fired = { [day]: ["a@1"] };
+  assert.doesNotThrow(() => free([], rule("a"), fired));
+  assert.throws(() => free([], rule("b", 3), fired), /напоминаний/);
+});
+test("прозвучавшее в другой день не закрывает этот", () => {
+  const fired = { "2026-11-09": ["a@1", "b@2", "c@3"] };
+  assert.doesNotThrow(() => free([], rule("new"), fired));
+});
+test("без сведений о срабатываниях предел считается как раньше", () => {
+  // Старые данные без поля fired не должны внезапно блокировать сохранение.
+  assert.doesNotThrow(() => free([], rule("a"), undefined));
+  assert.doesNotThrow(() => free([], rule("a"), {}));
+});
+test("сообщение о закрытом дне объясняет, что удаление не помогает", () => {
+  const fired = { [day]: ["a@1", "b@2", "c@3"] };
+  assert.throws(
+    () => free([], rule("new"), fired),
+    /Удаление их день не освобождает/,
+  );
+});
+
 test("a thirteenth draft sector never displaces a saved sector", () => {
   const saved = Array.from({ length: 12 }, (_, i) => ({
     id: "s@" + i,

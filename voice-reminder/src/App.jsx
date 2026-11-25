@@ -287,6 +287,22 @@ export default function App() {
   useEffect(() => {
     datesFromSpeech.current = dateSpeechEnabled(bill);
   }, [bill]);
+  // Короткий звук на каждое нажатие кнопки.
+  //
+  // Вешаем один обработчик на документ, а не на каждую кнопку: кнопок много,
+  // они появляются и исчезают, и забыть про одну — вопрос времени. Осмысленные
+  // действия (удаление, подтверждение) звучат сами, и щелчок нажатия не должен
+  // накладываться на них — это гасится внутри playUiSound.
+  useEffect(() => {
+    if (state?.settings?.uiSounds === false) return;
+    const onDown = (e) => {
+      const button = e.target?.closest?.("button, [role='button']");
+      if (!button || button.disabled) return;
+      playUiSound("press");
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [state?.settings?.uiSounds]);
   // Системная кнопка «Назад» на Android.
   //
   // Нативная сторона спрашивает эту функцию, потому что только веб-часть
@@ -890,7 +906,7 @@ export default function App() {
       // виде, что и при сохранении. Без подписки предел — три напоминания в
       // день, с подпиской — технический максимум 24 (по числу часов).
       assertDailyCapacity(state.reminders, [rule], {
-        events: state.events,
+        fired: state.fired,
         maxPerDay: dailyLimit(bill),
       });
       await persist(rule);
@@ -1079,6 +1095,7 @@ export default function App() {
             <Calendar
               month={month}
               onMonth={setMonth}
+              sounds={settings.uiSounds !== false}
               selecting={composing}
               dates={composing ? dates : []}
               draftId={draft.id}

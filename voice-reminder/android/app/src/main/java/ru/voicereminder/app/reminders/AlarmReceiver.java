@@ -20,7 +20,11 @@ public class AlarmReceiver extends BroadcastReceiver {
   }
   if(action.equals(AlarmScheduler.ACK)){ack(c,db,id,"notification");return;}if(action.equals(AlarmScheduler.SNOOZE)){snooze(c,db,id,5);return;}
   JSONObject event;
-  if(action.equals(AlarmScheduler.FIRE)){JSONObject r=db.rule(id);if(r==null||!r.optBoolean("enabled",true))return;long scheduled=r.optLong("nextTriggerAt",0);if(scheduled<=0||scheduled>System.currentTimeMillis()+1000)return;String eid=id+"@"+scheduled;event=db.event(eid);if(event==null){event=new JSONObject().put("id",eid).put("reminderId",id).put("text",r.getString("text")).put("state","ringing").put("scheduledAt",scheduled).put("attemptCount",0);event.put("nativeId",db.put("events","eid",eid,event));}else return;
+  if(action.equals(AlarmScheduler.FIRE)){JSONObject r=db.rule(id);if(r==null||!r.optBoolean("enabled",true))return;long scheduled=r.optLong("nextTriggerAt",0);if(scheduled<=0||scheduled>System.currentTimeMillis()+1000)return;String eid=id+"@"+scheduled;event=db.event(eid);if(event==null){event=new JSONObject().put("id",eid).put("reminderId",id).put("text",r.getString("text")).put("state","ringing").put("scheduledAt",scheduled).put("attemptCount",0);event.put("nativeId",db.put("events","eid",eid,event));
+    // Место в дне занято с момента, когда напоминание прозвучало. Отметка
+    // переживёт удаление напоминания — в этом весь смысл бесплатного предела.
+    db.markFired(eid,scheduled);
+   }else return;
    if(r.getJSONObject("schedule").optString("kind").equals("once")){r.put("enabled",false);db.put("rules","rid",id,r);}else AlarmScheduler.plan(c,db,r);
   }else{event=db.event(id);if(event==null||!java.util.Arrays.asList("ringing","waiting","snoozed").contains(event.optString("state")))return;}
   event.put("state","ringing").put("attemptCount",event.optInt("attemptCount")+1).put("deliveredAt",System.currentTimeMillis());db.put("events","eid",event.getString("id"),event);

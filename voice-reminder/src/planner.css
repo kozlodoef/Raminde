@@ -207,6 +207,45 @@
 .month-card header button {
   font-size: 28px;
 }
+/* Смена месяца: заголовок перелистывается, а не подменяется молча.
+ * key={month} в разметке пересоздаёт элемент, поэтому анимация запускается
+ * на каждом переходе. Сдвиг влево-вверх читается как «лист ушёл». */
+.month-card .month-title {
+  animation: month-in 220ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes month-in {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+/* Нажатие кнопки: короткое проседание. Нужно, чтобы касание чувствовалось
+ * даже когда действие не меняет экран мгновенно. */
+.icon-button,
+.text-button,
+button {
+  transition: transform 90ms ease;
+}
+.icon-button:active,
+.text-button:active,
+button:active {
+  transform: scale(0.96);
+}
+/* Кому движение мешает — отключаем, оставляя только изменение цвета. */
+@media (prefers-reduced-motion: reduce) {
+  .month-card .month-title {
+    animation: none;
+  }
+  .icon-button:active,
+  .text-button:active,
+  button:active {
+    transform: none;
+  }
+}
 .weekdays,
 .days {
   display: grid;

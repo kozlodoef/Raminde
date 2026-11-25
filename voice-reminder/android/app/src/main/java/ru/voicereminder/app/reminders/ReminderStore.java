@@ -18,7 +18,37 @@ public final class ReminderStore extends SQLiteOpenHelper {
  public synchronized int put(String table,String key,String id,JSONObject value)throws JSONException {ContentValues c=new ContentValues();c.put(key,id);c.put("payload",value.toString());int updated=getWritableDatabase().update(table,c,key+"=?",new String[]{id});if(updated==0)getWritableDatabase().insertOrThrow(table,null,c);return get(table,key,id).getInt("nativeId");}
  public synchronized JSONObject quota(){JSONObject q=meta("quota");try{String tz=q.optString("timezone",ZoneId.systemDefault().getId()),month=YearMonth.now(ZoneId.of(tz)).toString();if(!q.optString("month").equals(month)){q.put("month",month);q.put("used",0);}q.put("timezone",tz);meta("quota",q);}catch(Exception ignored){}return q;}
  public synchronized JSONObject access(){JSONObject a=meta("access");try{long start=a.optLong("trialStartedAt",0);if(start<=0){start=System.currentTimeMillis();a.put("trialStartedAt",start);}long end=Instant.ofEpochMilli(start).atZone(ZoneOffset.UTC).plusMonths(1).toInstant().toEpochMilli();a.put("trialEndsAt",end);meta("access",a);}catch(Exception e){diagnostic("Ошибка пробного периода: "+e.getMessage());}return a;}
- public synchronized JSONObject state(){JSONObject result=new JSONObject();try{result.put("reminders",all("rules"));result.put("events",all("events"));result.put("settings",meta("settings"));result.put("quota",quota());result.put("access",access());result.put("errors",meta("diagnostic"));JSONObject recovery=meta("restoreStatus");JSONObject boot=meta("bootSignal");int currentBoot=bootCount();recovery.put("bootConfirmed",currentBoot>=0&&boot.optInt("bootCount",-2)==currentBoot).put("bootReceivedAt",boot.optLong("receivedAt",0)).put("currentBootCount",currentBoot).put("appVersion",ru.voicereminder.app.BuildConfig.VERSION_NAME);recovery.put("bootRestore",meta("bootRestoreStatus"));result.put("recovery",recovery);}catch(Exception ignored){}return result;}
+ public synchronized JSONObject state(){JSONObject result=new JSONObject();try{result.put("reminders",all("rules"));result.put("events",all("events"));result.put("fired",fired());result.put("settings",meta("settings"));result.put("quota",quota());result.put("access",access());result.put("errors",meta("diagnostic"));JSONObject recovery=meta("restoreStatus");JSONObject boot=meta("bootSignal");int currentBoot=bootCount();recovery.put("bootConfirmed",currentBoot>=0&&boot.optInt("bootCount",-2)==currentBoot).put("bootReceivedAt",boot.optLong("receivedAt",0)).put("currentBootCount",currentBoot).put("appVersion",ru.voicereminder.app.BuildConfig.VERSION_NAME);recovery.put("bootRestore",meta("bootRestoreStatus"));result.put("recovery",recovery);}catch(Exception ignored){}return result;}
+ /**
+  * Дни, в которые напоминание уже прозвучало: { "2026-11-26": ["id@время", …] }.
+  *
+  * Хранится отдельно от events намеренно. events удаляются вместе с правилом,
+  * а прозвучавшее напоминание — это уже израсходованное место в дне. Если бы
+  * отметка исчезала вместе с правилом, предел в три напоминания обходился бы
+  * в два нажатия: поставить, дождаться, удалить.
+  */
+ public synchronized JSONObject fired(){return meta("fired");}
+ /** Отмечает, что напоминание с этим id прозвучало в день его запуска. */
+ public synchronized void markFired(String id,long scheduledAt){
+  try{
+   String day=LocalDate.ofInstant(Instant.ofEpochMilli(scheduledAt),ZoneId.systemDefault()).toString();
+   JSONObject fired=meta("fired");
+   JSONArray list=fired.optJSONArray(day);
+   if(list==null)list=new JSONArray();
+   boolean known=false;
+   for(int i=0;i<list.length();i++)if(id.equals(list.optString(i)))known=true;
+   if(!known)list.put(id);
+   fired.put(day,list);
+   // Храним только последние две недели: предел считается по текущему дню,
+   // а бесконечно копить историю срабатываний незачем.
+   String edge=LocalDate.now().minusDays(14).toString();
+   Iterator<String> keys=fired.keys();
+   List<String> stale=new ArrayList<>();
+   while(keys.hasNext()){String key=keys.next();if(key.compareTo(edge)<0)stale.add(key);}
+   for(String key:stale)fired.remove(key);
+   meta("fired",fired);
+  }catch(Exception ignored){}
+ }
  public synchronized void removeRule(String id){getWritableDatabase().delete("rules","rid=?",new String[]{id});JSONArray events=all("events");for(int i=0;i<events.length();i++){JSONObject e=events.optJSONObject(i);if(e.optString("reminderId").equals(id))getWritableDatabase().delete("events","eid=?",new String[]{e.optString("id")});}}
  /**
   * Убирает старые записи о срабатываниях.

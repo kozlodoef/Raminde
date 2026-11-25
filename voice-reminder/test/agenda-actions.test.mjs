@@ -58,7 +58,15 @@ test("правило без расписания не ломает разбор"
 // --- Звуки интерфейса ---
 
 test("звуки действий объявлены", () => {
-  assert.deepEqual(UI_SOUNDS.sort(), ["confirm", "delete", "edit", "tick", "toggle"]);
+  assert.deepEqual(UI_SOUNDS.sort(), [
+    "confirm",
+    "delete",
+    "edit",
+    "month",
+    "press",
+    "tick",
+    "toggle",
+  ]);
 });
 
 test("проигрывание звука без браузера не падает", () => {
