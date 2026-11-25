@@ -90,7 +90,9 @@ export async function scheduleAlarm(reminder) {
     await LN.schedule({
       notifications: [{
         id: idFromReminder(reminder),
-        title: '⏰ Напоминание',
+        // Заголовок — само напоминание, а не подпись «Напоминание»:
+        // в шторке человеку нужен текст, а не название приложения.
+        title: reminder.text || 'Remind me',
         body: reminder.text || 'Напоминание',
         channelId: CHANNEL_ID,
         schedule: { at: new Date(at), allowWhileIdle: true },

@@ -71,13 +71,12 @@ export default function AlarmBox({ event, settings, onAck, onSnooze }) {
     }
   };
   return (
-    <Modal title="Пора вспомнить" wide>
+    // Заголовка нет намеренно: человеку нужно увидеть само напоминание, а не
+    // «Пора вспомнить» над ним. Подпись осталась только для чтения с экрана.
+    <Modal label="Сработавшее напоминание" wide>
       <div className="alarm-icon">
         <Icon name="bell" size={40} />
       </div>
-      <h3 className="alarm-name">
-        {settings.name ? settings.name + "!" : "Напоминание"}
-      </h3>
       <p className="alarm-text">{event.text}</p>
       {error && (
         <p className="error" role="alert">

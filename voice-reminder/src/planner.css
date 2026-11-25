@@ -4,7 +4,18 @@
   padding: 20px 16px calc(110px + env(safe-area-inset-bottom));
 }
 .planner-content {
+  /*
+   * Только для простых экранов (события, настройки).
+   *
+   * На главной это правило мешало: min-height больше высоты при открытой
+   * клавиатуре, и блок растягивался по содержимому — прокрутки не возникало,
+   * а низ календаря уходил под клавиатуру. Главная задаёт свою высоту сама
+   * (см. .home-screen .planner-content ниже), поэтому там min-height снят.
+   */
   min-height: calc(100dvh - 160px);
+}
+.home-screen .planner-content {
+  min-height: 0;
 }
 .planner h1 {
   font-size: 30px;
@@ -519,14 +530,13 @@
 .home-screen {
   padding-bottom: 0;
 }
-.home-screen .planner-content {
-  height: calc(100vh - 180px - env(safe-area-inset-bottom));
-  height: calc(100dvh - 180px - env(safe-area-inset-bottom));
-  min-height: 0;
-  overflow-y: auto;
-  padding-bottom: 8px;
-  scrollbar-width: thin;
-}
+/*
+ * Правило для .planner-content задаётся НИЖЕ, в разделе
+ * «Intrinsic calendar» — там же, где описано, почему высота считается от
+ * --app-height. Дубль здесь убран: два одинаковых селектора с разными
+ * вычитаемыми (180px и 108px) перекрывали друг друга, и высота блока не
+ * совпадала с ожидаемой — из-за этого прокрутка не появлялась.
+ */
 .home-screen .planner-actions {
   position: fixed;
   bottom: calc(80px + env(safe-area-inset-bottom));
@@ -540,9 +550,10 @@
   z-index: 21;
 }
 @media (min-width: 800px) {
+  /* На широком экране клавиатура не мешает, но высоту всё равно берём от
+     видимой области: она учитывает и масштаб, и панели браузера. */
   .home-screen .planner-content {
-    height: calc(100vh - 190px);
-    height: calc(100dvh - 190px);
+    height: calc(var(--app-height, 100dvh) - 190px);
   }
   .home-screen .planner-actions {
     max-width: 560px;
@@ -673,17 +684,34 @@
 
 /* Intrinsic calendar; remaining vertical space belongs to the reminder field. */
 .home-screen .planner-content {
-  height: calc(100vh - 108px - env(safe-area-inset-bottom));
-  height: calc(100dvh - 108px - env(safe-area-inset-bottom));
+  /*
+   * Высота — от видимой области, а не от окна.
+   *
+   * Здесь стояло height: calc(100dvh - 108px). При открытой клавиатуре окно
+   * не меняется (dvh остаётся прежним), поэтому блок сохранял полную высоту,
+   * а его нижняя часть — календарь — уходила под клавиатуру, и прокрутить
+   * было нечего. Теперь высота считается от --app-height, которую ведёт
+   * viewport-height.js по visualViewport: когда клавиатура открывается,
+   * реальная высота уменьшается, содержимое перестаёт помещаться и
+   * появляется прокрутка.
+   *
+   * height: auto здесь не подходит: без ограничения высоты блок вырастает по
+   * содержимому, прокручивать внутри нечего, и низ календаря уходит за экран.
+   */
+  height: calc(var(--app-height, 100dvh) - 108px - env(safe-area-inset-bottom));
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding-bottom: 0;
+  scrollbar-width: thin;
 }
 .home-screen .home-layout {
-  height: 100%;
-  min-height: 100%;
+  min-height: 0;
   grid-template-rows: minmax(min-content, 1fr) auto;
   gap: 12px;
-}
-.home-screen .voice-card {
+}.home-screen .voice-card {
   display: flex;
   flex-direction: column;
   min-height: 280px;
@@ -778,7 +806,8 @@
 }
 @media (min-width: 800px) {
   .home-screen .planner-content {
-    height: calc(100dvh - 128px);
+    /* От видимой области, как и на телефоне: единая схема высоты. */
+    height: calc(var(--app-height, 100dvh) - 128px);
   }
   .home-screen .home-layout {
     grid-template-rows: minmax(0, 1fr);

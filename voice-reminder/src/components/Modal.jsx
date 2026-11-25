@@ -6,7 +6,13 @@
 import React, { useEffect, useRef } from "react";
 import Icon from "./Icon.jsx";
 
-export default function Modal({ title, children, onClose, wide = false }) {
+export default function Modal({
+  title,
+  label,
+  children,
+  onClose,
+  wide = false,
+}) {
   const ref = useRef();
   useEffect(() => {
     const prior = document.activeElement;
@@ -43,20 +49,24 @@ export default function Modal({ title, children, onClose, wide = false }) {
         className={"sheet " + (wide ? "wide" : "")}
         role="dialog"
         aria-modal="true"
-        aria-label={title}
+        // Заголовок может не показываться (окно сработавшего напоминания
+        // пишет только текст). Для чтения с экрана подпись всё равно нужна.
+        aria-label={title || label}
       >
-        <header className="sheet-header">
-          <h2>{title}</h2>
-          {onClose && (
-            <button
-              className="icon-button"
-              aria-label="Закрыть"
-              onClick={onClose}
-            >
-              <Icon name="close" />
-            </button>
-          )}
-        </header>
+        {(title || onClose) && (
+          <header className="sheet-header">
+            {title ? <h2>{title}</h2> : <span />}
+            {onClose && (
+              <button
+                className="icon-button"
+                aria-label="Закрыть"
+                onClick={onClose}
+              >
+                <Icon name="close" />
+              </button>
+            )}
+          </header>
+        )}
         {children}
       </section>
     </div>

@@ -2,28 +2,76 @@
 .planner {
   padding-bottom: max(20px, env(safe-area-inset-bottom));
 }
+/*
+ * Открытая клавиатура.
+ *
+ * data-keyboard="open" ставит viewport-height.js, когда видимая область стала
+ * заметно ниже окна. Когда человек печатает, ему нужен текст и календарь,
+ * а не крупный заголовок, — поэтому поле прижимаем к верху, а под ним
+ * оставляем прокручиваемый календарь. Без этого правила поле ввода
+ * растягивалось на всю высоту и вытесняло календарь за край.
+ */
+:root[data-keyboard="open"] .focus-editor {
+  flex: 0 0 auto;
+  min-height: 88px;
+}
+:root[data-keyboard="open"] .focus-home .month-card {
+  /* Календарь остаётся целым: прокрутка внешняя, а не внутри него. */
+  min-height: 0;
+  flex: 0 0 auto;
+}
+:root[data-keyboard="open"] .planner.home-screen {
+  /* Прокрутка к полю ввода не должна прятать его под шапку. */
+  scroll-padding-top: 12px;
+}
 .planner.home-screen {
-  height: 100vh;
+  /*
+   * Высота — по видимой области, а не по окну.
+   *
+   * При открытой клавиатуре окно (100dvh) не уменьшается, а видимая область
+   * уменьшается: клавиатура закрывает нижнюю часть экрана. Если высота задана
+   * жёстко и прокрутка запрещена (overflow: hidden), календарь уезжает под
+   * клавиатуру, а прокрутить к нему нельзя — нижние недели просто исчезают.
+   *
+   * --app-height выставляет viewport-height.js по visualViewport.
+   * Фолбэк на dvh нужен, если скрипт ещё не сработал.
+   */
   height: 100dvh;
+  height: var(--app-height, 100dvh);
   min-height: 0;
   padding: max(10px, env(safe-area-inset-top)) 16px
     max(12px, env(safe-area-inset-bottom));
+  /* Прокручивает .home-screen .planner-content (см. planner.css). Здесь
+     прокрутка запрещена, чтобы не появилось две прокрутки сразу. */
   overflow: hidden;
 }
 .home-screen .planner-content {
-  height: 100%;
+  /*
+   * Прокручиваемая область экрана. Раньше здесь стояли height: 100% и
+   * overflow: visible — содержимое выходило за край, а обрезанное клавиатурой
+   * доскроллить было нельзя. Теперь высоту задаёт planner.css (от
+   * --app-height), а здесь только гарантия, что блок не схлопнется.
+   */
   min-height: 0;
-  overflow: visible;
   padding: 0;
 }
 .focus-home {
+  /*
+   * Колонка занимает высоту родителя, но не растягивает его.
+   *
+   * Было min-height: 100% — при открытой клавиатуре родитель ниже календаря,
+   * и min-height заставлял колонку расти по содержимому. Тогда прокручивать
+   * внутри родителя нечего, и низ календаря уходил под клавиатуру. Теперь
+   * высота берётся от родителя (100%), а содержимое, если не влезло,
+   * прокручивается родителем.
+   */
   height: 100%;
+  min-height: 0;
   max-width: 540px;
   margin: 0 auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
-  min-height: 0;
 }
 .focus-header {
   flex: 0 0 44px;
