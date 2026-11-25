@@ -1,5 +1,37 @@
 import { startRecognition } from "./speech.js";
 
+/**
+ * Убирает «эхо» — короткие обрывки, которые движок выдаёт на тишине.
+ *
+ * Модель, которой подсунули ровный шум, всё равно возвращает какое-нибудь
+ * слово: «включи», «и», «на». Главная защита стоит в нативном слое (фрагмент
+ * без речи не отправляется на распознавание), но здесь добавлен последний
+ * фильтр: настоящая фраза напоминания содержит смысл, а не одно служебное
+ * слово. Это дешёвая страховка для веб-версии и для системного движка.
+ */
+const FILLER = new Set([
+  "и", "а", "в", "во", "на", "с", "со", "у", "о", "об", "ну", "да", "нет",
+  "не", "то", "э", "ээ", "эм", "мм", "ох", "ах", "так", "вот", "или",
+  "включи", "выключи", "стоп", "отмена",
+]);
+
+/** Осмысленный ли обрывок: не одно служебное слово и не пустышка. */
+export function isMeaningfulSegment(segment) {
+  const words = String(segment || "")
+    .toLowerCase()
+    .replaceAll("ё", "е")
+    .replace(/[^\p{L}\s-]/gu, " ")
+    .split(/\s+/)
+    .map((w) => w.replace(/^-+|-+$/g, ""))
+    .filter(Boolean);
+  if (!words.length) return false;
+  // Достаточно одного слова, которого нет в списке служебных: «хлеб» и
+  // «позвонить» — настоящая речь, а «включи» и «и» — нет. Длину слова не
+  // проверяем: короткие существительные («чай», «сок») тоже бывают командой,
+  // а шум модели почти всегда попадает в служебные слова.
+  return words.some((w) => !FILLER.has(w));
+}
+
 // The OS recognizer may finish at a pause. Only stop()/abort() end this logical session.
 // Raw microphone continuity is not guaranteed by Android's system speech service.
 export function startContinuousDictation({
@@ -37,6 +69,8 @@ export function startContinuousDictation({
   const append = (segment) => {
     segment = segment?.trim();
     if (!segment || segment === lastSegment) return;
+    // Обрывки, которые движок выдал на тишине, в текст не пускаем.
+    if (!isMeaningfulSegment(segment)) return;
     text = [text, segment].filter(Boolean).join(" ");
     lastSegment = segment;
     onFinal?.(text);
