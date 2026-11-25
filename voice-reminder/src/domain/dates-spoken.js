@@ -164,6 +164,11 @@ export function spokenDate(phrase, now = new Date(), options = {}) {
   );
   m = re.exec(text);
   if (m) {
+    // Порядковое числительное в обороте времени — это час, а не день.
+    // «Без пятнадцати шестого» значит 05:45: «шестого» здесь называет час,
+    // к которому идёт отсчёт назад. Раньше оно принималось за 6-е число, и
+    // время подменялось датой — напоминание вставало на 6 декабря в 15:00.
+    if (precededByTimeIdiom(text, m.index)) return null;
     const day = ORDINAL_DAYS[m[1]];
     if (day >= 1 && day <= 31) {
       const base = new Date(now.getFullYear(), now.getMonth(), day);
@@ -174,6 +179,21 @@ export function spokenDate(phrase, now = new Date(), options = {}) {
   }
 
   return null;
+}
+
+/**
+ * Стоит ли перед порядковым числительным оборот времени.
+ *
+ * «Без пятнадцати шестого», «половина одиннадцатого», «четверть седьмого»,
+ * «тридцать минут одиннадцатого»: числительное здесь называет час. Между
+ * «без» и часом может стоять до трёх числительных в родительном падеже
+ * («без двадцати пяти шестого»), поэтому окно берём с запасом.
+ */
+function precededByTimeIdiom(text, index) {
+  const before = text.slice(Math.max(0, index - 40), index);
+  return /(?:половин\p{L}*|пол|четверт\p{L}*|без|минут\p{L}*|часов|часа|ч)\s*(?:\p{L}+\s+){0,3}$/iu.test(
+    before,
+  );
 }
 
 /**
