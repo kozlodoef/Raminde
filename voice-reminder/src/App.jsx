@@ -11,7 +11,7 @@ import { isNative } from "./lib/native.js";
 import { startContinuousDictation } from "./lib/continuous-dictation.js";
 import { finishDictation } from "./lib/finish-dictation.js";
 import { primeAudio, playRecordingCue, playDictationDoneCue } from "./lib/alerts.js";
-import { ALERT_CUES, previewCue } from "./lib/alert-cues.js";
+import { ALERT_CUES, DEFAULT_CUE, previewCue } from "./lib/alert-cues.js";
 import { FONT_STEPS, MIN_FONT } from "./lib/fit-text.js";
 import Calendar from "./PlannerCalendar.jsx";
 import { assertDailyCapacity } from "./domain/day-capacity.js";
@@ -1323,7 +1323,7 @@ export default function App() {
                 <label className="field">
                   Сигнал перед напоминанием
                   <select
-                    value={settings.cue || "alarm"}
+                    value={settings.cue || DEFAULT_CUE}
                     onChange={(e) => {
                       setting({ cue: e.target.value });
                       previewCue(e.target.value);
@@ -1338,7 +1338,7 @@ export default function App() {
                   <button
                     type="button"
                     className="secondary cue-preview"
-                    onClick={() => previewCue(settings.cue || "alarm")}
+                    onClick={() => previewCue(settings.cue || DEFAULT_CUE)}
                   >
                     Прослушать
                   </button>
