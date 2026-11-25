@@ -34,7 +34,7 @@ public class DeliveryService extends Service {
  // «Понятно». Теперь уведомление несёт deleteIntent, и система сама
  // сообщает нам о смахивании — окно открывать не нужно.
  PendingIntent dismissed=AlarmScheduler.pending(c,AlarmScheduler.DISMISS,id);
- NotificationCompat.Builder b=new NotificationCompat.Builder(c,channel).setSmallIcon(ru.voicereminder.app.R.drawable.ic_reminder).setContentTitle("Remind me").setContentText(text).setStyle(new NotificationCompat.BigTextStyle().bigText(text)).setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(foreground?NotificationCompat.PRIORITY_LOW:NotificationCompat.PRIORITY_MAX).setContentIntent(content).setDeleteIntent(dismissed).setVisibility(settings.optBoolean("privateNotification")?NotificationCompat.VISIBILITY_PRIVATE:NotificationCompat.VISIBILITY_PUBLIC).setShowWhen(true).setOnlyAlertOnce(foreground).setAutoCancel(false).setOngoing(false).addAction(0,"Понятно",AlarmScheduler.pending(c,AlarmScheduler.ACK,id)).addAction(0,"Через 5 минут",AlarmScheduler.pending(c,AlarmScheduler.SNOOZE,id));if(!foreground)b.setFullScreenIntent(content,true);return b.build();}
+ NotificationCompat.Builder b=new NotificationCompat.Builder(c,channel).setSmallIcon(ru.voicereminder.app.R.drawable.ic_reminder).setContentTitle("Напомни").setContentText(text).setStyle(new NotificationCompat.BigTextStyle().bigText(text)).setCategory(NotificationCompat.CATEGORY_ALARM).setPriority(foreground?NotificationCompat.PRIORITY_LOW:NotificationCompat.PRIORITY_MAX).setContentIntent(content).setDeleteIntent(dismissed).setVisibility(settings.optBoolean("privateNotification")?NotificationCompat.VISIBILITY_PRIVATE:NotificationCompat.VISIBILITY_PUBLIC).setShowWhen(true).setOnlyAlertOnce(foreground).setAutoCancel(false).setOngoing(false).addAction(0,"Понятно",AlarmScheduler.pending(c,AlarmScheduler.ACK,id)).addAction(0,"Через 5 минут",AlarmScheduler.pending(c,AlarmScheduler.SNOOZE,id));if(!foreground)b.setFullScreenIntent(content,true);return b.build();}
  public static void notifyEvent(Context c,JSONObject event,JSONObject settings,boolean foreground){try{c.getSystemService(NotificationManager.class).notify(foreground?foregroundId(event):alertId(event),notification(c,event,settings,foreground));}catch(SecurityException ignored){}}
  /**
   * Звуковой сигнал перед напоминанием.
@@ -72,7 +72,7 @@ public class DeliveryService extends Service {
    alertTone.setVolume(1.0f);
    alertTone.play();
    // Запоминаем фактическую длительность: речь начнётся точно по её концу.
-   lastCueMs=(long)(pcm.length*1000L/rate);
+   lastCueMs=audibleMs(pcm,rate);
    handler.postDelayed(this::stopAlarmCue,lastCueMs+40);
   }catch(Exception ignored){stopAlarmCue();}
  }
@@ -141,6 +141,39 @@ public class DeliveryService extends Service {
   short[] pcm=new short[total];
   for(int i=0;i<total;i++)pcm[i]=(short)Math.round(out[i]*scale*32767);
   return pcm;
+ }
+
+ /**
+  * Когда сигнал фактически затихает, в миллисекундах.
+  *
+  * Речь должна начинаться сразу за звуком, почти без паузы. Раньше задержка
+  * бралась по полной длине буфера, а в конце лежит тишина: нота дописана до
+  * конца, но слышно её уже нет. У маримбы это около 190 мс — заметный
+  * провал между «дзынь» и словами.
+  *
+  * Считаем по готовому PCM, а не по таблицам нот: ноты перекрываются, и
+  * громкость в каждой точке складывается из нескольких источников. Заодно
+  * это исключает расхождение с JS — таблицы могут разойтись, а сигнал один
+  * и тот же.
+  *
+  * Порог -34 dB от пика (на слух тишина), окно 6 мс, чтобы не поймать
+  * переход через ноль посреди звука, плюс короткий спад от щелчка.
+  */
+ private long audibleMs(short[] pcm,int rate){
+  int total=pcm.length;
+  double peak=0;
+  for(int i=0;i<total;i++)peak=Math.max(peak,Math.abs(pcm[i]));
+  if(peak<=0)return total*1000L/rate;
+  double threshold=peak*Math.pow(10,-34/20.0);
+  int window=Math.max(1,(int)Math.round(rate*0.006));
+  int lastAudible=total;
+  for(int start=total-window;start>=0;start-=window){
+   double sum=0;
+   for(int i=start;i<start+window&&i<total;i++)sum+=(double)pcm[i]*pcm[i];
+   if(Math.sqrt(sum/window)>threshold){lastAudible=Math.min(total,start+window);break;}
+  }
+  long ms=(long)(lastAudible*1000.0/rate)+25;
+  return Math.min(total*1000L/rate,ms);
  }
 
  /** Длительность сигнала в миллисекундах: последняя нота задаёт конец. */

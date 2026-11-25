@@ -144,6 +144,55 @@ const NOTES = {
 // Трель: у будильника звук должен «дрожать», иначе он сливается в один тон.
 const TREMOLO = { alarm: { hz: 26, depth: 0.22 } };
 
+/**
+ * Момент, когда сигнал фактически затихает.
+ *
+ * Нужен, чтобы речь начиналась сразу за звуком, без слышимой паузы. Раньше
+ * пауза бралась по полной длительности буфера, а в конце сигнала лежит
+ * тишина: нота дописана до конца, но слышно её уже нет. У маримбы это
+ * около 170 мс — заметный провал между «дзынь» и словами.
+ *
+ * Считаем по готовому сигналу, а не по таблице обертонов: ноты
+ * перекрываются, и общая громкость в каждой точке складывается из
+ * нескольких источников. Формула по одному обертону давала ошибку в
+ * обе стороны.
+ *
+ * Порог -34 dB от пика: на слух это уже тишина. Плюс короткий спад, чтобы
+ * обрыв не щёлкнул.
+ */
+const QUIET_DB = -34;
+const RELEASE_MS = 25;
+
+export function cueSettledMs(kind) {
+  const key = NOTES[kind] ? kind : DEFAULT_CUE;
+  const rate = CUE_RATE;
+  const samples = cueSamples(key, rate);
+  const total = samples.length;
+
+  let peak = 0;
+  for (let i = 0; i < total; i++) {
+    const v = Math.abs(samples[i]);
+    if (v > peak) peak = v;
+  }
+  if (peak === 0) return Math.round((total / rate) * 1000);
+
+  const threshold = peak * Math.pow(10, QUIET_DB / 20);
+  // Окно около 6 мс: короче — ловим отдельные переходы через ноль и
+  // получаем ложную тишину посреди звука.
+  const window = Math.max(1, Math.round(rate * 0.006));
+  const lastAudible = (() => {
+    for (let start = total - window; start >= 0; start -= window) {
+      let sum = 0;
+      for (let i = start; i < start + window; i++) sum += samples[i] * samples[i];
+      if (Math.sqrt(sum / window) > threshold) return start + window;
+    }
+    return total;
+  })();
+
+  const ms = (lastAudible / rate) * 1000 + RELEASE_MS;
+  return Math.round(Math.min((total / rate) * 1000, ms));
+}
+
 /** Длительность сигнала в миллисекундах (для паузы перед речью). */
 export function cueDurationMs(kind) {
   const notes = NOTES[kind] || NOTES[DEFAULT_CUE];

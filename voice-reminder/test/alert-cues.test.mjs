@@ -16,6 +16,7 @@ import {
   DEFAULT_CUE,
   cueSamples,
   cueDurationMs,
+  cueSettledMs,
 } from "../src/lib/alert-cues.js";
 
 test("каждый сигнал из списка синтезируется", () => {
@@ -240,4 +241,77 @@ test("ноты в JS и Java совпадают", async () => {
     fromJs,
     "ноты в DeliveryService.java разошлись с alert-cues.js",
   );
+});
+
+// --- Речь сразу за сигналом ---
+//
+// Дефект: пауза перед речью бралась по полной длине буфера, а в конце
+// сигнала лежит тишина — нота дописана, но слышно её уже нет. У маримбы
+// это около 190 мс провала между «дзынь» и словами.
+
+test("пауза считается по слышимому концу, а не по длине буфера", () => {
+  for (const cue of ALERT_CUES) {
+    const settled = cueSettledMs(cue.id);
+    assert.ok(settled > 0, `${cue.id}: нет слышимого конца`);
+    assert.ok(
+      settled <= cueDurationMs(cue.id),
+      `${cue.id}: слышимый конец за пределами сигнала`,
+    );
+  }
+});
+
+test("у маримбы пауза заметно короче буфера", () => {
+  // Именно этот сигнал стоит по умолчанию, и именно у него в конце самая
+  // длинная тишина.
+  const saved = cueDurationMs(DEFAULT_CUE) - cueSettledMs(DEFAULT_CUE);
+  assert.ok(saved >= 100, `экономия всего ${saved} мс — пауза останется`);
+});
+
+test("слышимый конец не обрывает звук на середине", () => {
+  // Слишком ранняя речь перекрыла бы хвост сигнала — получилась бы каша.
+  for (const cue of ALERT_CUES) {
+    const settled = cueSettledMs(cue.id);
+    const full = cueDurationMs(cue.id);
+    assert.ok(
+      settled >= full * 0.4,
+      `${cue.id}: речь начнётся на ${settled} из ${full} мс — сигнал не дозвучал`,
+    );
+  }
+});
+
+test("неизвестный сигнал считает паузу как сигнал по умолчанию", () => {
+  assert.equal(cueSettledMs("неизвестный"), cueSettledMs(DEFAULT_CUE));
+});
+
+test("нативная сторона считает паузу по сигналу, а не по буферу", async () => {
+  // Если в Java вернуться к pcm.length, предпрослушивание и реальный сигнал
+  // разойдутся: в настройках звук оборвётся раньше, чем на телефоне.
+  const fs = await import("node:fs/promises");
+  const java = await fs.readFile(
+    new URL(
+      "../android/app/src/main/java/ru/voicereminder/app/reminders/DeliveryService.java",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(java, /lastCueMs=audibleMs\(pcm,rate\)/);
+  assert.ok(
+    !/lastCueMs=\(long\)\(pcm\.length/.test(java),
+    "пауза снова считается по длине буфера",
+  );
+  assert.match(java, /private long audibleMs\(short\[\] pcm,int rate\)/);
+});
+
+test("заголовок уведомления на русском", async () => {
+  // Было «Remind me»: английский заголовок в русском приложении.
+  const fs = await import("node:fs/promises");
+  const java = await fs.readFile(
+    new URL(
+      "../android/app/src/main/java/ru/voicereminder/app/reminders/DeliveryService.java",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(java, /setContentTitle\("Напомни"\)/);
+  assert.ok(!/setContentTitle\("Remind/.test(java));
 });
