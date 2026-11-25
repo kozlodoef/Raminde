@@ -79,6 +79,11 @@ import {
 } from "./domain/schedule-dates.js";
 import { playUiSound } from "./lib/ui-sounds.js";
 import {
+  parseNumericInput,
+  numericFieldValue,
+  dropDraft,
+} from "./lib/numeric-field.js";
+import {
   eventCount,
   blank,
   cachedDrafts,
@@ -123,7 +128,14 @@ export default function App() {
     // Поле ввода в фокусе: подсказка на это время скрывается.
     [editorFocused, setEditorFocused] = useState(false),
     // Карточки, которые сейчас уезжают вправо после удаления.
-    [removing, setRemoving] = useState([]);
+    [removing, setRemoving] = useState([]),
+    // Черновики числовых полей настроек: то, что человек набрал прямо сейчас.
+    //
+    // Нужны, чтобы поле можно было очистить. Пока значение уходит в
+    // настройки сразу, пустое поле даёт 0, проверка «больше нуля» не
+    // проходит — и React возвращает в поле прежнее число. Стереть «5»
+    // было невозможно.
+    [numDrafts, setNumDrafts] = useState({});
   const recording = useRef(),
     draftRef = useRef(draft),
     editorRef = useRef(null),
@@ -1345,10 +1357,26 @@ export default function App() {
                     <input
                       type="number"
                       min="1"
-                      value={settings.repeatMinutes}
-                      onChange={(e) =>
-                        +e.target.value > 0 &&
-                        setting({ repeatMinutes: +e.target.value })
+                      inputMode="numeric"
+                      value={numericFieldValue(
+                        numDrafts.repeatMinutes,
+                        settings.repeatMinutes,
+                      )}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setNumDrafts((d) => ({ ...d, repeatMinutes: raw }));
+                        const r = parseNumericInput(raw, { min: 1 });
+                        // Пустое поле — промежуточное состояние: человек
+                        // стирает старое, чтобы набрать новое. Сохранённое
+                        // значение при этом не меняем.
+                        if (r.value !== null)
+                          setting({ repeatMinutes: r.value });
+                      }}
+                      // Ушли из поля с пустым или негодным содержимым —
+                      // возвращаем сохранённое значение, а не оставляем
+                      // пустоту и не превращаем её в ноль.
+                      onBlur={() =>
+                        setNumDrafts((d) => dropDraft(d, "repeatMinutes"))
                       }
                     />
                   </label>
@@ -1357,9 +1385,22 @@ export default function App() {
                     <input
                       type="number"
                       min="0"
-                      value={settings.maxAttempts}
-                      onChange={(e) =>
-                        setting({ maxAttempts: Math.max(0, +e.target.value) })
+                      inputMode="numeric"
+                      value={numericFieldValue(
+                        numDrafts.maxAttempts,
+                        settings.maxAttempts,
+                      )}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setNumDrafts((d) => ({ ...d, maxAttempts: raw }));
+                        const r = parseNumericInput(raw, {
+                          min: 0,
+                          max: 99,
+                        });
+                        if (r.value !== null) setting({ maxAttempts: r.value });
+                      }}
+                      onBlur={() =>
+                        setNumDrafts((d) => dropDraft(d, "maxAttempts"))
                       }
                     />
                   </label>
