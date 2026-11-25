@@ -1,6 +1,6 @@
 import { parseGroup, dropDateWords, spokenDateKind } from "./groups.js";
 import { toDigits } from "./phrase-digits.js";
-import { spokenDate, stripDate } from "./dates-spoken.js";
+import { spokenDate, stripDate, dateComplaint } from "./dates-spoken.js";
 
 // The editor shows the complete phrase; the stored reminder keeps only its subject.
 //
@@ -96,6 +96,36 @@ export function parseEditor(phrase, current, now = new Date(), options = {}) {
               ? withoutDate.times
               : parsed.times) || [],
         },
+        id: current.id,
+        color: current.color,
+      };
+    }
+  } else {
+    // Дата названа, но такой не бывает: «двадцать девятого февраля» в
+    // невисокосный год, «тридцатого февраля», «тридцать первого апреля».
+    // Раньше фраза молча вставала на сегодня, и человек был уверен, что
+    // поставил напоминание на другой день. Теперь говорим об этом прямо,
+    // а разбирать дату не пытаемся: пусть поправит её сам.
+    const complaint = dateComplaint(phrase, now);
+    if (complaint) {
+      // Названную дату убираем и из текста: иначе в напоминании остался бы
+      // обрывок «Тридцатого февраля проверить» — дата не поставилась, а
+      // слова от неё уцелели.
+      const cleaned = dropDateWords(phrase);
+      const rest = parseGroup(cleaned || "", [], now, { dates: false });
+      // Сообщения может быть два — своё и от разборщика числовой даты
+      // («29.02.2027»). Оставляем одно, иначе человек читает одно и то же
+      // дважды разными словами.
+      const others = (parsed.issues || []).filter(
+        (e) => !/Такой даты/i.test(e),
+      );
+      return {
+        ...current,
+        ...parsed,
+        phrase: cleaned || phrase,
+        text: rest.text || current.text || "",
+        issues: [...new Set([...others, complaint])],
+        dateConflict: null,
         id: current.id,
         color: current.color,
       };

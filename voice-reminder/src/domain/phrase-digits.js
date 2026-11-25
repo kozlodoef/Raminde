@@ -257,27 +257,32 @@ function precededByTimeIdiom(text, index) {
 function replaceDates(text, now) {
   let out = text;
   const monthAlt = Object.keys(MONTHS).join('|');
+  // Год после месяца: «05.05 2027 года» — это всё ещё одна дата, и слово
+  // «года» в поле ввода лишнее. Забираем его в замену вместе с месяцем,
+  // иначе человек видел «05.05 2027 года в 10:00 вылет»: дата уже цифрами,
+  // а слово от неё осталось.
+  const yearTail = '(?:\\s+(\\d{4})\\s*(?:год[а-яё]*\\.?|г\\.?)?)?';
   // Составные («двадцать пятого») раньше одиночных: иначе словарь поймал бы
   // только «двадцать» и оставил «пятого» мусором рядом.
   const compound = new RegExp(
-    '(?<!\\p{L})(' + Object.keys(COMPOUND_DAYS).join('|') + ')\\s+(' + monthAlt + ')(?!\\p{L})',
+    '(?<!\\p{L})(' + Object.keys(COMPOUND_DAYS).join('|') + ')\\s+(' + monthAlt + ')' + yearTail + '(?!\\p{L})',
     'giu',
   );
-  out = out.replace(compound, (full, dayText, monthText) => {
+  out = out.replace(compound, (full, dayText, monthText, yearText) => {
     const day = COMPOUND_DAYS[dayText.toLowerCase().replaceAll('ё', 'е')];
     const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
     if (!day || !month) return full;
-    return pad2(day) + '.' + pad2(month);
+    return pad2(day) + '.' + pad2(month) + (yearText ? ' ' + yearText : '');
   });
   const ordinal = new RegExp(
-    '(?<!\\p{L})(' + Object.keys(ORDINAL_DAYS).join('|') + ')\\s+(' + monthAlt + ')(?!\\p{L})',
+    '(?<!\\p{L})(' + Object.keys(ORDINAL_DAYS).join('|') + ')\\s+(' + monthAlt + ')' + yearTail + '(?!\\p{L})',
     'giu',
   );
-  out = out.replace(ordinal, (full, dayText, monthText) => {
+  out = out.replace(ordinal, (full, dayText, monthText, yearText) => {
     const day = ORDINAL_DAYS[dayText.toLowerCase().replaceAll('ё', 'е')];
     const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
     if (!day || !month) return full;
-    return pad2(day) + '.' + pad2(month);
+    return pad2(day) + '.' + pad2(month) + (yearText ? ' ' + yearText : '');
   });
 
   // --- День без названия месяца: «двадцать шестого», «пятого» ---
@@ -311,6 +316,16 @@ function replaceDates(text, now) {
     // Год не пишем: он виден в календаре, а «26.11» читается быстрее.
     return pad2(day) + '.' + pad2(monthOfBareDay(day, now));
   });
+  // Слово «года» после уже записанной даты убираем.
+  //
+  // Дату в поле показываем цифрами («05.05 2027»), и «года» рядом с ней —
+  // лишнее: человек видел «05.05 2027 года в 10:00 вылет». Числовой день
+  // («5 мая») обрабатывается не тем проходом, что словесный, поэтому убрать
+  // хвост в самом шаблоне не получается — снимаем его отдельным правилом.
+  out = out.replace(
+    /(\d{2}\.\d{2}(?:\s+\d{4})?)\s+(?:год[а-яё]*|г\.)(?!\p{L})/giu,
+    '$1',
+  );
   return out;
 }
 
@@ -554,15 +569,23 @@ export function toDigits(phrase, parsed, now = new Date()) {
   });
 
   // --- 4. «20 ноября» → «20.11» ---
+  //
+  // Год забираем вместе с месяцем: «5 мая 2027 года» → «05.05 2027».
+  // Раньше шаблон останавливался на месяце, и слово «года» оставалось в
+  // поле ввода рядом с уже переведённой датой — «05.05 2027 года в 10:00».
   const dayMonthRe = new RegExp(
-    '(?<!\\p{L})(\\d{1,2}|' + NUMBER_WORD + ')\\s+(' + Object.keys(MONTHS).join('|') + ')(?!\\p{L})',
+    '(?<!\\p{L})(\\d{1,2}|' +
+      NUMBER_WORD +
+      ')\\s+(' +
+      Object.keys(MONTHS).join('|') +
+      ')(?:\\s+(\\d{4})\\s*(?:год[а-яё]*\\.?|г\\.?)?)?(?!\\p{L})',
     'giu',
   );
-  out = out.replace(dayMonthRe, (full, dayText, monthText) => {
+  out = out.replace(dayMonthRe, (full, dayText, monthText, yearText) => {
     const day = /^\d+$/.test(dayText) ? Number(dayText) : wordToNumber(dayText);
     const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
     if (!day || !month || day > 31) return full;
-    return pad2(day) + '.' + pad2(month);
+    return pad2(day) + '.' + pad2(month) + (yearText ? ' ' + yearText : '');
   });
 
   // --- 5. Дни недели: «в пятницу» → «пятница 20.11» ---

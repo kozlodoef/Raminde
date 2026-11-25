@@ -98,6 +98,32 @@ export function isoDate(d) {
  * @returns {{date: string, match: string, day: number, month: number} | null}
  */
 export function spokenDate(phrase, now = new Date(), options = {}) {
+  const found = findSpokenDate(phrase, options);
+  if (!found) return null;
+  // День без месяца («двадцать пятого») — ближайший такой день впереди.
+  // Раньше это считалось прямо здесь, до разделения на «найти» и
+  // «собрать»; теперь считается тут же, чтобы не терять поведение.
+  if (found.month === null) {
+    const day = found.day;
+    if (!(day >= 1 && day <= 31)) return null;
+    const base = new Date(now.getFullYear(), now.getMonth(), day);
+    if (day < now.getDate()) base.setMonth(base.getMonth() + 1);
+    if (base.getDate() !== day) base.setDate(0); // 31-е в коротком месяце
+    return { date: isoDate(base), match: found.match, day, month: base.getMonth() + 1 };
+  }
+  return build(found.day, found.month, found.year, found.match, now);
+}
+
+/**
+ * Находит разобранную дату без проверки, существует ли она.
+ *
+ * Нужно, чтобы отличить «даты в фразе нет» от «дата названа, но такой не
+ * бывает»: во втором случае человеку надо сказать об этом, иначе он решит,
+ * что напоминание поставлено, а оно молча встанет на сегодня.
+ *
+ * @returns {{day:number, month:number, year:number|null, match:string}|null}
+ */
+export function findSpokenDate(phrase, options = {}) {
   if (typeof phrase !== 'string' || !phrase.trim()) return null;
   const needMonth = options.needMonth === true;
   const text = phrase.toLowerCase().replaceAll('ё', 'е');
@@ -111,16 +137,24 @@ export function spokenDate(phrase, now = new Date(), options = {}) {
     .join('|');
 
   // 1. Порядковое + месяц: «двадцать пятого декабря».
+  //
+  // Год после месяца принимаем в любой из форм, в которых его произносят:
+  // «2027», «2027 года», «2027 год», «2027 г.». Раньше шаблон брал только
+  // голое число, и в случаях с «года» слово оставалось висеть в тексте
+  // напоминания — получалось «Года вылет» вместо «Вылет».
+  const YEAR_TAIL = "(?:\\s+(\\d{4})\\s*(?:год[а-яё]*\\.?|г\\.?)?)?";
   let re = new RegExp(
-    '(?<!\\p{L})(' + ordAlt + ')\\s+(' + monthAlt + ')(?:\\s+(\\d{4}))?(?!\\p{L})',
+    '(?<!\\p{L})(' + ordAlt + ')\\s+(' + monthAlt + ')' + YEAR_TAIL + '(?!\\p{L})',
     'iu',
   );
   let m = re.exec(text);
   if (m) {
-    const day = ORDINAL_DAYS[m[1]];
-    const month = MONTHS[m[2]];
-    const year = m[3] ? Number(m[3]) : null;
-    return build(day, month, year, m[0], now);
+    return {
+      day: ORDINAL_DAYS[m[1]],
+      month: MONTHS[m[2]],
+      year: m[3] ? Number(m[3]) : null,
+      match: m[0],
+    };
   }
 
   // 2. Количественное + месяц: «двадцать пять декабря», «25 декабря».
@@ -128,26 +162,30 @@ export function spokenDate(phrase, now = new Date(), options = {}) {
     .sort((a, b) => b.length - a.length)
     .join('|');
   re = new RegExp(
-    '(?<!\\p{L})(\\d{1,2}|' + cardAlt + ')\\s+(' + monthAlt + ')(?:\\s+(\\d{4}))?(?!\\p{L})',
+    '(?<!\\p{L})(\\d{1,2}|' + cardAlt + ')\\s+(' + monthAlt + ')' + YEAR_TAIL + '(?!\\p{L})',
     'iu',
   );
   m = re.exec(text);
   if (m) {
     const raw = m[1];
-    const day = /^\d+$/.test(raw) ? Number(raw) : CARDINAL[raw];
-    const month = MONTHS[m[2]];
-    const year = m[3] ? Number(m[3]) : null;
-    return build(day, month, year, m[0], now);
+    return {
+      day: /^\d+$/.test(raw) ? Number(raw) : CARDINAL[raw],
+      month: MONTHS[m[2]],
+      year: m[3] ? Number(m[3]) : null,
+      match: m[0],
+    };
   }
 
   // 3. Числовая дата: «25.12», «25.12.2026».
   re = /(?<!\d)(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?(?!\d)/u;
   m = re.exec(text);
   if (m) {
-    const day = Number(m[1]);
-    const month = Number(m[2]);
-    const year = m[3] ? Number(m[3]) : null;
-    return build(day, month, year, m[0], now);
+    return {
+      day: Number(m[1]),
+      month: Number(m[2]),
+      year: m[3] ? Number(m[3]) : null,
+      match: m[0],
+    };
   }
 
   // 4. День месяца без месяца: «двадцать пятого» — берём ближайший такой
@@ -169,16 +207,49 @@ export function spokenDate(phrase, now = new Date(), options = {}) {
     // к которому идёт отсчёт назад. Раньше оно принималось за 6-е число, и
     // время подменялось датой — напоминание вставало на 6 декабря в 15:00.
     if (precededByTimeIdiom(text, m.index)) return null;
-    const day = ORDINAL_DAYS[m[1]];
-    if (day >= 1 && day <= 31) {
-      const base = new Date(now.getFullYear(), now.getMonth(), day);
-      if (day < now.getDate()) base.setMonth(base.getMonth() + 1);
-      if (base.getDate() !== day) base.setDate(0); // 31-е в коротком месяце
-      return { date: isoDate(base), match: m[0], day, month: base.getMonth() + 1 };
-    }
+    return { day: ORDINAL_DAYS[m[1]], month: null, year: null, match: m[0] };
   }
 
   return null;
+}
+
+/** Есть ли в фразе название месяца — признак того, что дату называли. */
+export function hasMonthWord(phrase) {
+  if (typeof phrase !== 'string') return false;
+  const text = phrase.toLowerCase().replaceAll('ё', 'е');
+  return new RegExp('(?<!\\p{L})(?:' + Object.keys(MONTHS).join('|') + ')(?!\\p{L})', 'u').test(
+    text,
+  );
+}
+
+/**
+ * Объяснение, почему названную дату не удалось поставить.
+ *
+ * Возвращает текст для человека или null, если придираться не к чему.
+ * Нужен для несуществующих дат: «двадцать девятого февраля» в невисокосный
+ * год, «тридцатого февраля», «тридцать первого апреля». Раньше такая фраза
+ * молча превращалась в напоминание на сегодня — человек был уверен, что
+ * поставил его на другой день.
+ */
+export function dateComplaint(phrase, now = new Date()) {
+  const found = findSpokenDate(phrase, {});
+  if (!found) return null;
+  // День без месяца проверяется своим путём — он всегда существует.
+  if (found.month === null) return null;
+  const { day, month, year } = found;
+  if (day < 1 || day > 31 || month < 1 || month > 12) return null;
+  const exists = (y) => {
+    const d = new Date(y, month - 1, day);
+    return d.getDate() === day && d.getMonth() === month - 1;
+  };
+  if (year) {
+    return exists(year)
+      ? null
+      : `Такой даты нет: ${day}.${pad2(month)}.${year}. Проверьте день и месяц.`;
+  }
+  // Без года: 29 февраля возможно, просто не каждый год, — это не ошибка.
+  if (exists(2028)) return null;
+  return `Такой даты не бывает: ${day}.${pad2(month)}. Проверьте день и месяц.`;
 }
 
 /**
@@ -199,23 +270,46 @@ function precededByTimeIdiom(text, index) {
 /**
  * Собирает дату. Если она уже прошла — берёт следующую (человек говорит
  * о будущем: «первого сентября» в ноябре = 1 сентября следующего года).
+ *
+ * Несуществующая дата («двадцать девятого февраля» в невисокосный год,
+ * «тридцатого февраля», «тридцать первого апреля») возвращает null: лучше
+ * переспросить, чем молча поставить напоминание на соседний день. Раньше
+ * такой оборот проходил как настоящая дата или терял часть слов.
  */
 function build(day, month, year, match, now) {
   if (!day || !month || day < 1 || day > 31 || month < 1 || month > 12) {
     return null;
   }
+  const exists = (y) => {
+    const d = new Date(y, month - 1, day);
+    return d.getDate() === day && d.getMonth() === month - 1;
+  };
   let d;
   if (year) {
+    if (!exists(year)) return null;
     d = new Date(year, month - 1, day);
-    // Дата с явным годом тоже проверяется: «31 февраля 2027» не существует,
-    // а JavaScript молча переносит его на 3 марта. Раньше такой оборот
-    // проходил как настоящая дата, и напоминание вставало не на тот день.
-    if (d.getDate() !== day || d.getMonth() !== month - 1) return null;
   } else {
-    d = new Date(now.getFullYear(), month - 1, day);
-    if (d.getDate() !== day) return null; // 30 февраля и подобное
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    if (d < today) d.setFullYear(d.getFullYear() + 1);
+    // Ищем ближайший год, в котором такой день существует и ещё не прошёл.
+    //
+    // Так 29 февраля попадает на ближайший високосный год, а не теряется:
+    // раньше проверка «существует ли день в этом году» срабатывала раньше
+    // поиска, и «двадцать девятого февраля» в невисокосный год просто
+    // исчезало из разбора — фраза рассыпалась, а напоминание вставало на
+    // сегодня. Ограничение в восемь лет покрывает любой цикл високосности;
+    // не нашлось — значит дата невозможна (30 февраля).
+    let found = null;
+    for (let i = 0; i <= 8; i++) {
+      const y = now.getFullYear() + i;
+      if (!exists(y)) continue;
+      const candidate = new Date(y, month - 1, day);
+      if (candidate >= today) {
+        found = candidate;
+        break;
+      }
+    }
+    if (!found) return null;
+    d = found;
   }
   return { date: isoDate(d), match, day: d.getDate(), month: d.getMonth() + 1 };
 }

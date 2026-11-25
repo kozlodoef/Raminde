@@ -418,10 +418,20 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
       !e.includes("будущих дат"),
   );
   if (!times.length) issues.push("Во сколько напомнить?");
-  const schedule =
-    dateSpeech && /через\s/iu.test(normalized) && !selectedDates.length
-      ? parsed.schedule
-      : { ...defaultSchedule(now), kind: "dates", dates: dates.sort(), times };
+  // Относительное время («через два часа») — правило разового запуска.
+  // Его время хранится в at, а не в списке times: там раньше оставалось
+  // значение по умолчанию из defaultSchedule («09:00»), и в сохранённом
+  // правиле рядом с верным at лежало чужое время. Само срабатывание не
+  // ломалось, но данные были противоречивыми.
+  const relative = dateSpeech && /через\s/iu.test(normalized) && !selectedDates.length;
+  const schedule = relative
+    ? {
+        ...parsed.schedule,
+        times: parsed.schedule.at
+          ? [shortTime(parsed.schedule.at)]
+          : times,
+      }
+    : { ...defaultSchedule(now), kind: "dates", dates: dates.sort(), times };
   return {
     ...parsed,
     originalTranscript: phrase,

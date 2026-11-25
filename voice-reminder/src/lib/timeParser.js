@@ -471,7 +471,7 @@ export function parseReminder(phrase, baseArg) {
     }
 
     // ---------- D. Дата (после времени) ----------
-    // "15 октября", "5 мая 2027", "двадцать пятое октября"
+    // "15 октября", "5 мая 2027", "5 мая 2027 года", "двадцать пятое октября"
     if (dayOffset === null && !absDate) {
       const m = eat(
         mkRe(
@@ -482,30 +482,56 @@ export function parseReminder(phrase, baseArg) {
             join(MONTHS) +
             ")" +
             WB_R +
-            "(?:\\s+(\\d{4}))?",
+            // Год принимаем и с словом: «2027 года», «2027 г.». Раньше бралось
+            // только голое число, и «года» оставалось в тексте напоминания.
+            "(?:\\s+(\\d{4})\\s*(?:год[а-яё]*\\.?|г\\.?)?)?",
         ),
       );
       if (m) {
         const day = wordToNum(m[1]);
         const mon = MONTHS[m[2]];
         if (day >= 1 && day <= 31 && mon !== undefined) {
-          let year = m[3] ? +m[3] : base.getFullYear();
-          const probe = new Date(year, mon, day, 12);
-          if (probe.getMonth() !== mon || probe.getDate() !== day)
-            return {
-              when: null,
-              text: phrase,
-              timeFound: false,
-              dateFound: false,
-              approx: true,
-              error: "Такой даты не существует",
-            };
-          if (
-            !m[3] &&
-            probe <
-              new Date(base.getFullYear(), base.getMonth(), base.getDate(), 12)
-          )
-            year += 1;
+          const today = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 12);
+          const exists = (y) => {
+            const d = new Date(y, mon, day, 12);
+            return d.getMonth() === mon && d.getDate() === day;
+          };
+          let year;
+          if (m[3]) {
+            year = +m[3];
+            if (!exists(year))
+              return {
+                when: null,
+                text: phrase,
+                timeFound: false,
+                dateFound: false,
+                approx: true,
+                error: "Такой даты не бывает. Проверьте день и месяц.",
+              };
+          } else {
+            // Ближайший год, где такой день есть и ещё не прошёл. Для
+            // 29 февраля это ближайший високосный год, а не потеря даты:
+            // раньше проверка шла по текущему году, и в невисокосный
+            // «двадцать девятого февраля» отбрасывалось целиком.
+            year = base.getFullYear();
+            for (let i = 0; i <= 8; i++) {
+              const y = base.getFullYear() + i;
+              if (!exists(y)) continue;
+              if (new Date(y, mon, day, 12) >= today) {
+                year = y;
+                break;
+              }
+            }
+            if (!exists(year))
+              return {
+                when: null,
+                text: phrase,
+                timeFound: false,
+                dateFound: false,
+                approx: true,
+                error: "Такой даты не бывает. Проверьте день и месяц.",
+              };
+          }
           absDate = { y: year, m: mon, d: day };
           dateFound = true;
         }
@@ -539,7 +565,7 @@ export function parseReminder(phrase, baseArg) {
               timeFound: false,
               dateFound: false,
               approx: true,
-              error: "Такой даты не существует",
+              error: "Такой даты не бывает. Проверьте день и месяц.",
             };
           absDate = { y: year, m: mon, d: day };
           dateFound = true;
