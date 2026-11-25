@@ -26,7 +26,7 @@ export default function AlarmBox({ event, settings, onAck, onSnooze }) {
       if (settings.sound) playAlarm(false);
       if (settings.mode !== "voice")
         sendPush(
-          "Remind me",
+          "Напомни",
           settings.privateNotification ? "Новое напоминание" : event.text,
         );
       if (settings.mode !== "notification")
