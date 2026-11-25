@@ -5,6 +5,7 @@ import {
   nextOccurrences,
   pad,
   validateSchedule,
+  PAST_TIME_MESSAGE,
 } from "./calendar.js";
 const DAYS = [
   [/понедельник[а-я]*/u, 1],
@@ -201,8 +202,8 @@ export function parseIntent(phrase, now = new Date()) {
     issues.push("Уточните время напоминания");
   if (!recurring && parsed.when) {
     s.at = parsed.when.toISOString();
-    if (parsed.when <= now)
-      issues.push("Указанное время уже прошло — выберите новую дату");
+    // Одна формулировка на всё приложение.
+    if (parsed.when <= now) issues.push(PAST_TIME_MESSAGE);
   }
   if (recurring && parsed.when && !multiple)
     s.times = [

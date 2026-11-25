@@ -7,6 +7,8 @@ import {
   dateEpoch,
   zone,
   pad,
+  hasPastOccurrence,
+  PAST_TIME_MESSAGE,
 } from "./calendar.js";
 import { parseIntent } from "./intent.js";
 import {
@@ -408,7 +410,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
   const issues = parsed.issues.filter(
     (e) =>
       !e.includes("время") &&
-      !e.includes("Указанное время уже прошло") &&
+      e !== PAST_TIME_MESSAGE &&
       !e.includes("будущих дат"),
   );
   if (!times.length) issues.push("Во сколько напомнить?");
@@ -466,18 +468,17 @@ export function buildGroup(
     const tz = schedule.timezoneMode === "fixed" ? schedule.timezone : zone();
     if (schedule.dates.some((d) => !Number.isFinite(dateEpoch(d))))
       throw Error("Некорректная дата");
-    if (
-      !allowPast &&
-      schedule.dates.some((d) =>
-        schedule.times.some((t) => zonedTime(d, t, tz) <= now),
-      )
-    )
-      throw Error(
-        "Часть выбранных дат или времён уже прошла. Исправьте их перед сохранением",
-      );
+    // Прошедшее время — одна формулировка на всё приложение.
+    // allowPast означает, что правило уже стоит и человек правит его текст:
+    // прошлые срабатывания в нём законны, ругаться на них не нужно.
+    if (!allowPast && hasPastOccurrence(schedule, now, tz))
+      throw Error(PAST_TIME_MESSAGE);
   }
-  if (!nextOccurrences(schedule, now, 1).length)
-    throw Error("Нет будущих срабатываний: проверьте дату и время");
+  // Проверка «нет будущих срабатываний» тоже про прошлое, поэтому при
+  // allowPast она не применяется: иначе исправление текста у напоминания,
+  // которое уже сработало, было бы невозможно.
+  if (!allowPast && !nextOccurrences(schedule, now, 1).length)
+    throw Error(PAST_TIME_MESSAGE);
   return {
     ...draft,
     text: draft.text.trim(),

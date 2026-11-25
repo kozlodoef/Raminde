@@ -103,7 +103,7 @@ test("past times cannot be silently shifted", () =>
         { text: "x", dates: ["2026-10-06"], times: ["09:00"] },
         now.getTime(),
       ),
-    /прошла/,
+    /Проверьте дату и время напоминания!/,
   ));
 test("missing time cannot save", () =>
   assert.throws(
@@ -197,7 +197,7 @@ test("a queued draft cannot use createdAt to silently skip past selected times",
         },
         now.getTime(),
       ),
-    /прошла/,
+    /Проверьте дату и время напоминания!/,
   ));
 test("an explicitly edited existing group can preserve its historical dates", () =>
   assert.ok(

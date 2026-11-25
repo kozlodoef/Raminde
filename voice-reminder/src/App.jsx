@@ -35,6 +35,8 @@ import {
 import {
   localDate,
   shortTime,
+  hasPastOccurrence,
+  PAST_TIME_MESSAGE,
 } from "./domain/calendar.js";
 import {
   colorFor,
@@ -360,6 +362,29 @@ export default function App() {
     };
   }, [live, draft.phrase, draft.text]);
 
+  /**
+   * Сообщение, если выбранное время уже прошло.
+   *
+   * Проверяем и даты, и времена сразу: человек должен увидеть это при вводе,
+   * а не узнать при сохранении, когда всё уже набрано.
+   *
+   * @param {object} current — текущий черновик
+   * @returns {string} текст сообщения или пустая строка
+   */
+  function pastNotice(current) {
+    const dates = current?.selectedDates?.length
+      ? current.selectedDates
+      : current?.dates || [];
+    const times = current?.times || current?.schedule?.times || [];
+    if (!dates.length || !times.length) return "";
+    const schedule = {
+      kind: "dates",
+      dates,
+      times,
+      timezoneMode: "deviceLocal",
+    };
+    return hasPastOccurrence(schedule, Date.now()) ? PAST_TIME_MESSAGE : "";
+  }
   function typePhrase(phrase) {
     setLive(phrase);
     setCreating(!!phrase.trim());
@@ -373,6 +398,9 @@ export default function App() {
       });
       draftRef.current = next;
       setDraft(next);
+      // Прошедшее время видно сразу при вводе, а не только при сохранении:
+      // человек успевает поправить дату, пока не нажал «Готово».
+      setMessage(pastNotice(next));
       // Показываем фразу цифрами: «двадцать пятого декабря в 19:30»
       // читается и проверяется быстрее, чем «двадцать пятого декабря
       // в половину восьмого вечера». Сырая расшифровка остаётся в
@@ -388,7 +416,8 @@ export default function App() {
     if (result.blocked) return;
     draftRef.current = result.draft;
     setDraft(result.draft);
-    setMessage("");
+    // Отметили день, на котором время уже прошло, — говорим сразу.
+    setMessage(pastNotice(result.draft));
   };
   const remindersKey = JSON.stringify([
     state?.reminders || [],

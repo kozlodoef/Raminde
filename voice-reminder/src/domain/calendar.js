@@ -329,6 +329,76 @@ export const shortTime = (t, tz = zone()) =>
     minute: "2-digit",
     hourCycle: "h23",
   }).format(new Date(t));
+
+/**
+ * Единственный текст для случая «время уже прошло».
+ *
+ * Сообщение одно на всё приложение намеренно. Раньше в разных местах было
+ * разное: «Указанное время уже прошло — выберите новую дату», «Часть
+ * выбранных дат или времён уже прошла. Исправьте их перед сохранением»,
+ * «Нет будущих срабатываний: проверьте дату и время». Человек видел разные
+ * формулировки об одной и той же ошибке и не понимал, что делать.
+ *
+ * Теперь при попытке поставить напоминание в прошлое показывается ровно это.
+ */
+export const PAST_TIME_MESSAGE = "Проверьте дату и время напоминания!";
+
+/**
+ * Есть ли в расписании срабатывания, которые уже прошли.
+ *
+ * Нужно, чтобы предупредить человека ещё при вводе, а не только в момент
+ * сохранения. Проверяем именно прошедшие моменты, а не пустой список
+ * будущих: серия может иметь и прошедшие, и будущие срабатывания.
+ *
+ * @param {object} s — расписание
+ * @param {number} now — текущий момент, мс
+ * @param {string} [tz] — часовой пояс
+ * @returns {boolean}
+ */
+export function hasPastOccurrence(s, now = Date.now(), tz) {
+  if (!s || typeof s !== "object") return false;
+  const zoneName = tz || (s.timezoneMode === "fixed" ? s.timezone : zone());
+  if (s.kind === "once") {
+    const t = new Date(s.at).getTime();
+    return Number.isFinite(t) && t <= now;
+  }
+  if (s.kind === "dates") {
+    if (!Array.isArray(s.dates) || !Array.isArray(s.times)) return false;
+    return s.dates.some((d) =>
+      s.times.some((time) => {
+        const t = zonedTime(d, time, zoneName);
+        return Number.isFinite(t) && t <= now;
+      }),
+    );
+  }
+  if (s.kind === "interval") {
+    const start = new Date(s.startAt).getTime();
+    if (!Number.isFinite(start)) return false;
+    const every = s.intervalMinutes * 60000;
+    // Отсчёт уже начался и хотя бы одно срабатывание должно было пройти.
+    if (!every || now - start < every) return false;
+    return nextOccurrences(s, now, 1).length === 0;
+  }
+  // Календарные повторы (ежедневно, по неделям, месяцам): прошедшее время
+  // имеется в виду, когда в этот день время уже наступило, а других дней
+  // в расписании нет.
+  const anchor = dateEpoch(s.anchorDate);
+  if (!Number.isFinite(anchor)) return false;
+  if (Array.isArray(s.times) && s.times.length) {
+    const today = localDate(new Date(now), zoneName);
+    const weekday = [7, 1, 2, 3, 4, 5, 6][new Date(now).getDay()];
+    const todayIncluded =
+      !s.weekdays?.length || s.weekdays.includes(weekday);
+    if (todayIncluded && today >= s.anchorDate) {
+      const allPast = s.times.every((time) => {
+        const t = zonedTime(today, time, zoneName);
+        return Number.isFinite(t) && t <= now;
+      });
+      if (allPast && !nextOccurrences(s, now, 1).length) return true;
+    }
+  }
+  return nextOccurrences(s, now, 1).length === 0;
+}
 export function describe(s) {
   if (s.kind === "dates")
     return `${s.dates.length} дат · ${s.times.join(" · ")}`;
