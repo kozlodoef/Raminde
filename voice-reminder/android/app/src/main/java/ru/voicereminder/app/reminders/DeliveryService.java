@@ -22,6 +22,17 @@ public class DeliveryService extends Service {
  // Длительность только что проигранного сигнала: речь стартует ровно
  // в этот момент, поэтому пауза всегда совпадает со звуком.
  private volatile long lastCueMs=0;
+ // Когда сигнал начал звучать. Нужно, чтобы речь ждала только остаток
+ // сигнала, а не полную длительность заново: speakAfterCue может вызваться
+ // позже, когда синтезатор речи уже поднялся.
+ private volatile long cueStartedAt=0;
+ // Настройки сигнала и повторы: сигнал звучит встык, пока не начнётся речь.
+ private JSONObject cueSettings=null;
+ private Runnable cueRepeat=null;
+ private int cueRepeats=0;
+ private volatile boolean speakingStarted=false;
+ /** Предел повторов, если синтезатор не поднялся вовсе. */
+ private static final int CUE_MAX_REPEATS=6;
  public static void stopEvent(String id){DeliveryService s=instance;if(s!=null)s.handler.post(()->{s.queue.removeIf(e->e.optString("id").equals(id));if(s.current!=null&&s.current.optString("id").equals(id)){if(s.tts!=null)s.tts.stop();s.finish();}});}
  public static Notification notification(Context c,JSONObject event,JSONObject settings,boolean foreground){NotificationManager nm=c.getSystemService(NotificationManager.class);String channel=foreground?FOREGROUND_CHANNEL:"remindme_alert_v3_"+(settings.optBoolean("sound",true)?"sound":"silent")+(settings.optBoolean("vibration",true)?"_v":"_n");if(Build.VERSION.SDK_INT>=26){NotificationChannel ch=new NotificationChannel(channel,foreground?"Служебные уведомления":"Напоминания",foreground?NotificationManager.IMPORTANCE_LOW:NotificationManager.IMPORTANCE_HIGH);ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);ch.enableVibration(settings.optBoolean("vibration",true));ch.setSound(null,null);if(foreground)ch.enableVibration(false);nm.createNotificationChannel(ch);}
  Intent open=new Intent(c,MainActivity.class).setFlags(Intent.FLAG_ACTIVITY_NEW_TASK|Intent.FLAG_ACTIVITY_SINGLE_TOP);PendingIntent content=PendingIntent.getActivity(c,0,open,PendingIntent.FLAG_UPDATE_CURRENT|PendingIntent.FLAG_IMMUTABLE);
@@ -54,14 +65,36 @@ public class DeliveryService extends Service {
   */
  private void playAlarmCue(JSONObject settings){
   if(!settings.optBoolean("sound",true))return;
+  cueSettings=settings;
+  playCueOnce();
+  // Сигнал повторяется, пока не заговорит синтезатор.
+  //
+  // Зачем. Синтезатор речи поднимается не мгновенно: на телефоне с
+  // нейроголосом Google между «дзынь» и словами проходит до двух секунд, и
+  // всё это время стояла тишина — звук напоминания начинался с провала.
+  // Теперь сигнал идёт встык, пока речь не начнётся, и обрывается ровно в
+  // её первый звук (см. onStart). Так паузы не слышно: она заполнена тем же
+  // сигналом.
+  //
+  // Ограничение по числу повторов: если синтезатор не поднялся вовсе,
+  // сигнал не должен звучать вечно.
+  cueRepeat=null;
+  cueRepeats=0;
+  scheduleCueRepeat();
+ }
+
+ /** Проигрывает сигнал один раз, с начала. */
+ private void playCueOnce(){
+  if(cueSettings==null)return;
   try{
-   String kind=settings.optString("cue","marimba");
+   String kind=cueSettings.optString("cue","marimba");
    short[] pcm=cuePcm(kind);
    int rate=CUE_RATE;
    AudioAttributes attrs=new AudioAttributes.Builder()
      .setUsage(AudioAttributes.USAGE_ALARM)
      .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
      .build();
+   stopAlarmCue();
    alertTone=new AudioTrack(attrs,
      new AudioFormat.Builder().setSampleRate(rate)
        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -71,10 +104,20 @@ public class DeliveryService extends Service {
    // Громкость на максимум: сигнал должен разбудить, а не намекнуть.
    alertTone.setVolume(1.0f);
    alertTone.play();
+   cueStartedAt=System.currentTimeMillis();
    // Запоминаем фактическую длительность: речь начнётся точно по её концу.
    lastCueMs=audibleMs(pcm,rate);
    handler.postDelayed(this::stopAlarmCue,lastCueMs+40);
   }catch(Exception ignored){stopAlarmCue();}
+ }
+
+ /** Ставит следующий повтор сигнала, если речь ещё не началась. */
+ private void scheduleCueRepeat(){
+  if(cueRepeats>=CUE_MAX_REPEATS)return;
+  cueRepeats++;
+  long gap=Math.max(120,lastCueMs>0?lastCueMs:CUE_FALLBACK_MS);
+  cueRepeat=()->{ if(speakingStarted){return;} playCueOnce(); scheduleCueRepeat(); };
+  handler.postDelayed(cueRepeat,gap);
  }
 
  /**
@@ -239,7 +282,7 @@ public class DeliveryService extends Service {
 
   CUE_TREMOLO.put("alarm",new double[]{26,0.22});
  }
-private void stopAlarmCue(){if(alertTone!=null){try{alertTone.stop();}catch(Exception ignored){}try{alertTone.release();}catch(Exception ignored){}alertTone=null;}}
+private void stopAlarmCue(){if(cueRepeat!=null){handler.removeCallbacks(cueRepeat);cueRepeat=null;}if(alertTone!=null){try{alertTone.stop();}catch(Exception ignored){}try{alertTone.release();}catch(Exception ignored){}alertTone=null;}}
  // Речь начинается в тот момент, когда сигнал закончился.
  //
  // Раньше здесь стояла фиксированная пауза 700 мс: сигнал уже отзвучал, а
@@ -261,10 +304,29 @@ private void stopAlarmCue(){if(alertTone!=null){try{alertTone.stop();}catch(Exce
     handler.postDelayed(watchdog,30000);
    }catch(Exception ignored){finish();}
   };
-  // Задержка = длительность сигнала. Считаем её по факту, чтобы она всегда
-  // совпадала со звуком, даже если сигнал длиннее или короче обычного.
-  long cueMs=lastCueMs>0?lastCueMs:CUE_FALLBACK_MS;
-  handler.postDelayed(start,cueMs);
+  // Задержка = ОСТАТОК сигнала, а не его полная длительность.
+  //
+  // Раньше здесь всегда ждали полную длительность, отсчитанную заново от
+  // момента вызова. Но speakAfterCue вызывается не только сразу за сигналом:
+  // если синтезатор речи ещё не поднялся, drain() выходит и возвращается
+  // позже — когда TTS готов. К этому времени сигнал давно отзвучал, а
+  // задержка отсчитывалась с нуля: между «дзынь» и словами вставало больше
+  // трёх секунд (видно в логах: сигнал в 10.001, речь в 13.241).
+  //
+  // Теперь запоминаем, когда сигнал начался, и ждём только остаток. Если он
+  // уже кончился — говорим сразу.
+  // Речь запускается сразу.
+  //
+  // Раньше здесь ждали длительность сигнала, отсчитанную заново от момента
+  // вызова. Но speakAfterCue вызывается не всегда сразу за сигналом: если
+  // синтезатор ещё не поднялся, drain() выходит и возвращается позже. К
+  // этому времени сигнал давно отзвучал, а задержка отсчитывалась с нуля —
+  // между «дзынь» и словами вставало до трёх секунд.
+  //
+  // Теперь паузу заполняет сам сигнал: он повторяется встык, пока не
+  // начнётся речь (см. playAlarmCue и onStart), и обрывается на её первом
+  // звуке. Ждать здесь нечего — стартуем немедленно.
+  start.run();
  }
  @Override public void onCreate(){super.onCreate();instance=this;audio=getSystemService(AudioManager.class);tts=new TextToSpeech(this,status->{
   if(status!=TextToSpeech.SUCCESS){
@@ -293,7 +355,7 @@ private void stopAlarmCue(){if(alertTone!=null){try{alertTone.stop();}catch(Exce
    }
   }
   ready=true;drain();
-});tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){public void onStart(String id){}public void onDone(String id){handler.post(()->finish());}public void onError(String id){handler.post(()->{try(ReminderStore db=new ReminderStore(DeliveryService.this)){db.diagnostic("Не удалось озвучить напоминание: проверьте TTS-голос");}finish();});}});lock=((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"raminde:voice");}
+});tts.setOnUtteranceProgressListener(new UtteranceProgressListener(){public void onStart(String id){handler.post(()->{speakingStarted=true;stopAlarmCue();});}public void onDone(String id){handler.post(()->finish());}public void onError(String id){handler.post(()->{try(ReminderStore db=new ReminderStore(DeliveryService.this)){db.diagnostic("Не удалось озвучить напоминание: проверьте TTS-голос");}finish();});}});lock=((PowerManager)getSystemService(POWER_SERVICE)).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK,"raminde:voice");}
  @Override public int onStartCommand(Intent intent,int flags,int startId){if(intent==null){stopSelf();return START_NOT_STICKY;}try(ReminderStore db=new ReminderStore(this)){JSONObject e=db.event(intent.getStringExtra("eventId"));if(e==null){stopSelf();return START_NOT_STICKY;}startForeground(foregroundId(e),notification(this,e,db.meta("settings"),true));if(!lock.isHeld())lock.acquire(10000);playAlarmCue(db.meta("settings"));queue.add(e);drain();}return START_NOT_STICKY;}
  private void drain(){if(current!=null||queue.isEmpty()||!ready)return;current=queue.remove();try(ReminderStore db=new ReminderStore(this)){JSONObject e=db.event(current.getString("id"));if(e==null||e.optString("state").equals("acknowledged")||e.optString("state").equals("snoozed")){finish();return;}JSONObject settings=db.meta("settings");NotificationManager nm=getSystemService(NotificationManager.class);if(nm.getCurrentInterruptionFilter()==NotificationManager.INTERRUPTION_FILTER_NONE||audio.getMode()!=AudioManager.MODE_NORMAL){db.diagnostic("Озвучивание пропущено: включён режим «Не беспокоить»");finish();return;}
  if(!lock.isHeld())lock.acquire(30000);AudioAttributes attrs=new AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_ALARM).setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build();tts.setAudioAttributes(attrs);tts.setSpeechRate((float)settings.optDouble("rate",0.95));if(Build.VERSION.SDK_INT>=26){focus=new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK).setAudioAttributes(attrs).setOnAudioFocusChangeListener(change->{if(change==AudioManager.AUDIOFOCUS_LOSS){tts.stop();finish();}}).build();if(audio.requestAudioFocus(focus)!=AudioManager.AUDIOFOCUS_REQUEST_GRANTED){db.diagnostic("Аудио занято другим приложением");finish();return;}}

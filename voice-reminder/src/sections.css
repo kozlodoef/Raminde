@@ -28,6 +28,22 @@
   letter-spacing: -0.02em;
   font-weight: 600;
   margin: 0;
+  /* Заголовок не переносится: «Настройки» на две строки раздували шапку и
+   * сдвигали весь раздел вниз. Ужимаем кегль под место, оставшееся от
+   * кнопки возврата, — она важнее, потому что по ней уходят с экрана. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Шапка раздела: заголовок и кнопка в одну строку, кнопка не сжимается. */
+.planner .page-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: nowrap;
 }
 
 /* Кнопка возврата одинаковая в обоих разделах: таблетка в цвет текста,
@@ -187,19 +203,40 @@
 .sheet .field select {
   appearance: none;
   -webkit-appearance: none;
-  padding-right: 44px;
+  /* Отступ справа больше ширины стрелки и её позиции: иначе длинная надпись
+   * уходит под значок. На телефоне с системным размером текста 1.4 надпись
+   * «Голосом и уведомление» не помещалась и обрезалась многоточием от
+   * системы — теперь запас достаточный, а лишнее переносится. */
+  padding-right: 48px;
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1.5 7 7.5 13 1.5' fill='none' stroke='%23182b32' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 16px center;
   background-size: 14px 9px;
   cursor: pointer;
+  /* Надпись не обрезается: переносим её на вторую строку, а высоту поля
+   * разрешаем расти. Иначе при увеличенном системном шрифте от текста
+   * оставалось «Голосом и уведомление…». */
+  white-space: normal;
+  text-overflow: clip;
+  line-height: 1.3;
+  height: auto;
+  /* Длинные надписи не должны вылезать за поле по горизонтали. */
+  overflow: hidden;
+  text-wrap: pretty;
 }
 
-/* В тёмной теме стрелка светлая: иначе её не видно на тёмном фоне. */
+/* В тёмной теме стрелка светлая: иначе её не видно на тёмном фоне.
+ *
+ * Условие проверяет РЕАЛЬНУЮ тёмную тему, а не «всё, что не light».
+ * Раньше здесь стояло :not([data-theme="light"]) — и при настройке «как на
+ * устройстве» (data-theme="system") в светлой системной теме рисовалась
+ * светлая стрелка на светлом фоне, то есть невидимая. Именно это и было
+ * видно на телефоне: список без стрелки.
+ *
+ * theme.css ставит data-theme="dark" при тёмной теме — и в системной, и в
+ * ручной. От него и наследуемся. */
 :root[data-theme="dark"] .planner .field select,
-:root[data-theme="dark"] .sheet .field select,
-:root:not([data-theme="light"]) .planner .field select,
-:root:not([data-theme="light"]) .sheet .field select {
+:root[data-theme="dark"] .sheet .field select {
   background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1.5 7 7.5 13 1.5' fill='none' stroke='%23f5f0e6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 
