@@ -84,12 +84,22 @@ export function isoDate(d) {
 /**
  * Находит в фразе дату, произнесённую словами или цифрами.
  *
+ * options.needMonth — брать только дату с месяцем («двадцать пятого
+ * декабря», «25.12») и не считать датой одинокое порядковое числительное.
+ *
+ * Это важно для разбора времени: «половина одиннадцатого», «четверть
+ * седьмого», «тридцать минут одиннадцатого» — здесь «одиннадцатого» и
+ * «седьмого» обозначают ЧАС, а не день месяца. Без флага такие фразы
+ * превращались в дату, и время терялось.
+ *
  * @param {string} phrase
  * @param {Date} now — относительно чего считаем «в прошлом»
+ * @param {{needMonth?: boolean}} [options]
  * @returns {{date: string, match: string, day: number, month: number} | null}
  */
-export function spokenDate(phrase, now = new Date()) {
+export function spokenDate(phrase, now = new Date(), options = {}) {
   if (typeof phrase !== 'string' || !phrase.trim()) return null;
+  const needMonth = options.needMonth === true;
   const text = phrase.toLowerCase().replaceAll('ё', 'е');
 
   const monthAlt = Object.keys(MONTHS).join('|');
@@ -142,6 +152,10 @@ export function spokenDate(phrase, now = new Date()) {
 
   // 4. День месяца без месяца: «двадцать пятого» — берём ближайший такой
   // день, если он ещё впереди, иначе следующий месяц.
+  //
+  // Этот шаг пропускаем, когда нужна дата с месяцем: иначе «половина
+  // одиннадцатого» (11 часов 30 минут) превращалось в 11-е число.
+  if (needMonth) return null;
   re = new RegExp(
     '(?<!\\p{L})(' +
       Object.keys(ORDINAL_DAYS).sort((a, b) => b.length - a.length).join('|') +
@@ -173,6 +187,10 @@ function build(day, month, year, match, now) {
   let d;
   if (year) {
     d = new Date(year, month - 1, day);
+    // Дата с явным годом тоже проверяется: «31 февраля 2027» не существует,
+    // а JavaScript молча переносит его на 3 марта. Раньше такой оборот
+    // проходил как настоящая дата, и напоминание вставало не на тот день.
+    if (d.getDate() !== day || d.getMonth() !== month - 1) return null;
   } else {
     d = new Date(now.getFullYear(), month - 1, day);
     if (d.getDate() !== day) return null; // 30 февраля и подобное

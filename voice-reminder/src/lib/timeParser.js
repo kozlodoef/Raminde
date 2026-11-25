@@ -11,6 +11,9 @@ import {
   minutesAfterHour,
   looksLikeTime,
 } from "../domain/time-lexicon.js";
+// Даты словами («двадцать пятого декабря») — тоже из общего модуля, чтобы
+// голос, сохранение и поле ввода понимали их одинаково.
+import { spokenDate } from "../domain/dates-spoken.js";
 
 const NUM_WORDS = {
   ноль: 0,
@@ -357,8 +360,33 @@ export function parseReminder(phrase, baseArg) {
     }
 
     // ---------- C. Время ----------
+    // ---------- C0. Дата словами — ДО времени ----------
+    // «двадцать пятого декабря» — это дата, но числительное «двадцать»
+    // похоже на час, и время перехватывало его: выходило 20:00 сегодня, а
+    // «пятого декабря в 19:30» уезжало в текст напоминания.
+    //
+    // Поэтому дату словами ищем первым делом и запоминаем её границы: всё,
+    // что попало в дату, время уже не рассматривает.
+    let masked = null;
+    if (dayOffset === null && !absDate) {
+      // needMonth: «половина одиннадцатого», «четверть седьмого» и «тридцать
+      // минут одиннадцатого» — это время, а не 11-е и 7-е число. Датой
+      // считаем только оборот с названием месяца («двадцать пятого декабря»).
+      const said = spokenDate(s, base, { needMonth: true });
+      if (said) {
+        const at = s.indexOf(said.match);
+        if (at >= 0) {
+          const [y, mo, day] = said.date.split("-").map(Number);
+          absDate = { y, m: mo - 1, d: day };
+          dateFound = true;
+          consumed.push({ match: said.match, index: at });
+          // Маска той же длины: позиции в строке не сдвигаются, но время
+          // внутри даты больше не находится.
+          masked = s.slice(0, at) + " ".repeat(said.match.length) + s.slice(at + said.match.length);
+        }
+      }
+    }
     // Часть суток ищем заранее: она либо войдёт в совпадение времени
-    // («в десять вечера»), либо будет поглощена отдельно ниже.
     const podRe = mkRe("(?<!\\p{Ll})(" + join(PARTS_OF_DAY) + ")" + WB_R);
     const podHit = podRe.exec(s);
     const podSpan = podHit
@@ -377,8 +405,12 @@ export function parseReminder(phrase, baseArg) {
     // Шаблон намеренно широкий и может поймать дату («16 25 мая»). Решение
     // принимает разбор: parseClockText возвращает null, и запись отбрасывается.
     if (hour === null) {
+      // Ищем по строке с замаскированной датой: «двадцать пятого декабря» не
+      // должно дать 20:00. Позиции совпадают с исходной строкой, поэтому
+      // вырезаем по ней же.
+      const scan = masked || s;
       const re = mkRe("(?:где-то\\s+в|примерно\\s+в|около\\s+в|в|у)?\\s*(" + CLOCK_SRC + ")", "gi");
-      for (const m of s.matchAll(re)) {
+      for (const m of scan.matchAll(re)) {
         const token = m[1];
         // Предлог «в» перед временем забираем вместе со временем, иначе он
         // остаётся в тексте напоминания: «Купить хлеб в».

@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { toggleEditorDate } from "../src/domain/home-editor.js";
 import { assertDailyCapacity } from "../src/domain/day-capacity.js";
 import {
-  FREE_DATES_PER_EVENT,
   FREE_REMINDERS_PER_DAY,
   isPro,
   dateSpeechEnabled,
@@ -23,50 +22,44 @@ function reminder(id, date, times = ["10:00"]) {
   };
 }
 
-// --- Одна дата на событие в бесплатной версии ---
+// --- Несколько дат на событие доступны всем ---
+//
+// Раньше в бесплатной версии можно было отметить только одну дату, и это
+// было единственным ограничением вместе с дневным лимитом. Ограничение
+// снято: несколько дат на событие доступны без подписки.
 
-test("бесплатная версия: первая дата выбирается", () => {
-  const r = toggleEditorDate({ selectedDates: [] }, "2026-12-01", {
-    maxDates: FREE_DATES_PER_EVENT,
-  });
-  assert.equal(r.blocked, false);
-  assert.deepEqual(r.draft.selectedDates, ["2026-12-01"]);
-});
-
-test("бесплатная версия: вторая дата отклоняется", () => {
-  const r = toggleEditorDate({ selectedDates: ["2026-12-01"] }, "2026-12-02", {
-    maxDates: FREE_DATES_PER_EVENT,
-  });
-  assert.equal(r.blocked, true);
-  assert.deepEqual(r.draft.selectedDates, ["2026-12-01"]);
-});
-
-test("бесплатная версия: выбранную дату можно снять", () => {
-  const r = toggleEditorDate({ selectedDates: ["2026-12-01"] }, "2026-12-01", {
-    maxDates: FREE_DATES_PER_EVENT,
-  });
-  assert.equal(r.blocked, false);
-  assert.deepEqual(r.draft.selectedDates, []);
-});
-
-test("бесплатная версия: после снятия можно выбрать другую", () => {
-  const cleared = toggleEditorDate(
-    { selectedDates: ["2026-12-01"] },
-    "2026-12-01",
-    { maxDates: FREE_DATES_PER_EVENT },
-  ).draft;
-  const r = toggleEditorDate(cleared, "2026-12-05", {
-    maxDates: FREE_DATES_PER_EVENT,
-  });
-  assert.equal(r.blocked, false);
-  assert.deepEqual(r.draft.selectedDates, ["2026-12-05"]);
-});
-
-test("ПРО: несколько дат разрешены", () => {
+test("вторая дата выбирается без подписки", () => {
   const first = toggleEditorDate({ selectedDates: [] }, "2026-12-01").draft;
   const r = toggleEditorDate(first, "2026-12-02");
   assert.equal(r.blocked, false);
   assert.deepEqual(r.draft.selectedDates, ["2026-12-01", "2026-12-02"]);
+});
+
+test("третья и последующие даты тоже выбираются", () => {
+  let draft = { selectedDates: [] };
+  for (const d of ["2026-12-01", "2026-12-02", "2026-12-03"])
+    draft = toggleEditorDate(draft, d).draft;
+  assert.deepEqual(draft.selectedDates, [
+    "2026-12-01",
+    "2026-12-02",
+    "2026-12-03",
+  ]);
+});
+
+test("выбранную дату можно снять", () => {
+  const r = toggleEditorDate({ selectedDates: ["2026-12-01"] }, "2026-12-01");
+  assert.equal(r.blocked, false);
+  assert.deepEqual(r.draft.selectedDates, []);
+});
+
+test("после снятия можно выбрать другую", () => {
+  const cleared = toggleEditorDate(
+    { selectedDates: ["2026-12-01"] },
+    "2026-12-01",
+  ).draft;
+  const r = toggleEditorDate(cleared, "2026-12-05");
+  assert.equal(r.blocked, false);
+  assert.deepEqual(r.draft.selectedDates, ["2026-12-05"]);
 });
 
 // --- Не больше трёх напоминаний в день в бесплатной версии ---
@@ -156,6 +149,13 @@ test("признак ПРО берётся из ответа платёжног�
   assert.equal(isPro({ premium: true }), true);
   assert.equal(isPro({ premium: false }), false);
   assert.equal(isPro(null), false);
+});
+
+test("даты из речи доступны всем — это больше не возможность ПРО", () => {
+  // Было: dateSpeechEnabled(bill) давал true только с подпиской, и без неё
+  // «двадцать пятого декабря» уходило в текст, а напоминание срабатывало
+  // сегодня. Теперь разбор дат включён всегда.
   assert.equal(dateSpeechEnabled({ premium: true }), true);
-  assert.equal(dateSpeechEnabled(undefined), false);
+  assert.equal(dateSpeechEnabled(undefined), true);
+  assert.equal(dateSpeechEnabled(null), true);
 });

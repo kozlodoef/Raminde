@@ -175,11 +175,53 @@ const NUMBER_WORD =
  * @param {Date}   now
  * @returns {string} фраза с цифрами там, где разбор был уверенным
  */
+/**
+ * Заменяет словесные даты на цифры: «двадцать пятого декабря» → «25.12».
+ *
+ * Вызывается ДО разбора времени. Причина: дата начинается с числительного,
+ * которое похоже на час. «Двадцать пятого декабря в 19:30» разбиралось как
+ * «20:00» плюс «05.12», и в поле человек видел «20:00 05.12 в 19:30».
+ *
+ * Дату не просто заменяем, а отмечаем той же длины пробелами в маске —
+ * так время внутри даты уже не находится, а позиции остальных замен не
+ * сдвигаются.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function replaceDates(text) {
+  let out = text;
+  const monthAlt = Object.keys(MONTHS).join('|');
+  // Составные («двадцать пятого») раньше одиночных: иначе словарь поймал бы
+  // только «двадцать» и оставил «пятого» мусором рядом.
+  const compound = new RegExp(
+    '(?<!\\p{L})(' + Object.keys(COMPOUND_DAYS).join('|') + ')\\s+(' + monthAlt + ')(?!\\p{L})',
+    'giu',
+  );
+  out = out.replace(compound, (full, dayText, monthText) => {
+    const day = COMPOUND_DAYS[dayText.toLowerCase().replaceAll('ё', 'е')];
+    const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
+    if (!day || !month) return full;
+    return pad2(day) + '.' + pad2(month);
+  });
+  const ordinal = new RegExp(
+    '(?<!\\p{L})(' + Object.keys(ORDINAL_DAYS).join('|') + ')\\s+(' + monthAlt + ')(?!\\p{L})',
+    'giu',
+  );
+  out = out.replace(ordinal, (full, dayText, monthText) => {
+    const day = ORDINAL_DAYS[dayText.toLowerCase().replaceAll('ё', 'е')];
+    const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
+    if (!day || !month) return full;
+    return pad2(day) + '.' + pad2(month);
+  });
+  return out;
+}
+
 export function toDigits(phrase, parsed, now = new Date()) {
   if (typeof phrase !== 'string' || !phrase) return phrase;
-  let out = phrase;
+  let out = replaceDates(phrase);
 
-  // --- 1. Все словесные формы времени → цифры ---
+  // --- 2. Все словесные формы времени → цифры ---
   //
   // Формы берём из лексикона — того же, по которому идёт разбор. Раньше здесь
   // были отдельные шаблоны на каждый оборот, и в поле оставались слова:
@@ -387,34 +429,6 @@ export function toDigits(phrase, parsed, now = new Date()) {
       return shortDate(d, now) || '';
     });
   }
-
-  // --- 3б. Порядковый день месяца: «первого сентября» → «01.09» ---
-  // Количественные («одно сентября») так не говорят, поэтому нужен
-  // отдельный словарь порядковых. Без этой замены дата оставалась
-  // словами — именно её пользователи просят видеть цифрами.
-  // Составные («двадцать пятого») проверяем первыми: иначе словарь
-  // поймал бы только «двадцать» и оставил «пятого» мусором рядом.
-  const monthAlt = Object.keys(MONTHS).join('|');
-  const compoundDayRe = new RegExp(
-    '(?<!\\p{L})(' + Object.keys(COMPOUND_DAYS).join('|') + ')\\s+(' + monthAlt + ')(?!\\p{L})',
-    'giu',
-  );
-  out = out.replace(compoundDayRe, (full, dayText, monthText) => {
-    const day = COMPOUND_DAYS[dayText.toLowerCase().replaceAll('ё', 'е')];
-    const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
-    if (!day || !month) return full;
-    return pad2(day) + '.' + pad2(month);
-  });
-  const ordDayRe = new RegExp(
-    '(?<!\\p{L})(' + Object.keys(ORDINAL_DAYS).join('|') + ')\\s+(' + monthAlt + ')(?!\\p{L})',
-    'giu',
-  );
-  out = out.replace(ordDayRe, (full, dayText, monthText) => {
-    const day = ORDINAL_DAYS[dayText.toLowerCase().replaceAll('ё', 'е')];
-    const month = MONTHS[monthText.toLowerCase().replaceAll('ё', 'е')];
-    if (!day || !month) return full;
-    return pad2(day) + '.' + pad2(month);
-  });
 
   // --- 3в. Части дня без точного часа: «в обед» → «в 13:00» ---
   // «Обед» и «полдень» у каждого свои, но как ориентир в поле ввода

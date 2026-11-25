@@ -46,7 +46,6 @@ import {
   accessActive,
   dateSpeechEnabled,
   isPro,
-  FREE_DATES_PER_EVENT,
   FREE_REMINDERS_PER_DAY,
 } from "./domain/access.js";
 import {
@@ -129,7 +128,10 @@ export default function App() {
     // Доступно ли распознавание дат из речи. Держим в ref: обработчики
     // голосовой сессии живут дольше одного рендера и должны видеть текущее
     // значение, а не то, что было при их создании.
-    datesFromSpeech = useRef(false);
+    // Даты из речи доступны всем: ограничение платной версии снято.
+    // Оставляем в ref, чтобы обработчики голосовой сессии видели текущее
+    // значение и не зависели от момента создания.
+    datesFromSpeech = useRef(true);
   draftRef.current = draft;
   useEffect(() => {
     const legacy = cachedDrafts();
@@ -208,6 +210,8 @@ export default function App() {
   useEffect(() => {
     datesFromSpeech.current = dateSpeechEnabled(bill);
   }, [bill]);
+  // Разбор дат включён всегда, поэтому ref не должен зависеть от ответа
+  // платёжного сервера: dateSpeechEnabled() возвращает true.
   const alarm = state?.events.find((e) =>
     ["ringing", "waiting"].includes(e.state),
   );
@@ -379,16 +383,9 @@ export default function App() {
     }, 140);
   }
   const pick = (date) => {
-    const result = toggleEditorDate(draftRef.current, date, {
-      // В бесплатной версии на событие можно отметить только одну дату.
-      ...(isPro(bill) ? {} : { maxDates: FREE_DATES_PER_EVENT }),
-    });
-    if (result.blocked) {
-      setMessage(
-        `На одно событие в бесплатной версии можно выбрать только одну дату. Несколько дат — в ПРО-версии.`,
-      );
-      return;
-    }
+    // Несколько дат на одно событие доступны всем: ограничение снято.
+    const result = toggleEditorDate(draftRef.current, date);
+    if (result.blocked) return;
     draftRef.current = result.draft;
     setDraft(result.draft);
     setMessage("");
@@ -1179,8 +1176,8 @@ export default function App() {
               </p>
               <p className="hint">
                 {isPro(bill)
-                  ? "Без ограничений: любое число напоминаний в день, несколько дат на событие, распознавание дат голосом."
-                  : `Бесплатно: до ${FREE_REMINDERS_PER_DAY} напоминаний в день и одна дата на событие. В ПРО-версии — без ограничений, несколько дат на событие и распознавание дат голосом. Сохранённые напоминания продолжают работать.`}
+                  ? "Без ограничений: любое число напоминаний в день."
+                  : `Бесплатно: до ${FREE_REMINDERS_PER_DAY} напоминаний в день. Всё остальное без ограничений — даты словами («завтра», «двадцать пятого декабря»), несколько дат на событие, любое число напоминаний в другие дни. Сохранённые напоминания продолжают работать.`}
               </p>
               <button
                 className="secondary full"
