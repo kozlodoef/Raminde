@@ -1,5 +1,17 @@
 apply plugin: 'com.android.application'
 
+// Ключ подписи релиза.
+//
+// Файл android/keystore/keystore.properties в репозиторий не попадает (см.
+// .gitignore): пароль от ключа подписи в открытом виде — это возможность
+// выпустить обновление от вашего имени. Если файла нет, сборка не падает:
+// релиз тогда подписывается отладочным ключом, и это видно в предупреждении.
+def keystorePropsFile = rootProject.file('keystore/keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
 android {
     namespace = "ru.voicereminder.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -9,8 +21,11 @@ android {
         applicationId "ru.voicereminder.app"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 24
-        versionName "1.7.0-sherpa"
+        versionCode 25
+        // Название версии без суффикса: «-sherpa» — это деталь реализации,
+        // а не версия для магазина. Ру-store показывает её в карточке
+        // обновления, и посторонний суффикс там выглядит как недоделка.
+        versionName "1.8.0"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         ndk {
             // sherpa-onnx поставляет готовые библиотеки под все основные ABI,
@@ -28,10 +43,31 @@ android {
             noCompress 'onnx', 'txt'
         }
     }
+    // signingConfigs обязан идти до buildTypes: при обратном порядке
+    // gradle ещё не знает конфигурацию release и падает на «Could not get
+    // unknown property 'release' for SigningConfig container».
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile file("../keystore/" + keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
     buildTypes {
         release {
+            // RuStore не принимает сборки, подписанные отладочным
+            // сертификатом, и требует debuggable="false" (п. 2.14).
+            debuggable false
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            // Ключа может не быть — например, на чужой машине при первом
+            // запуске. Тогда релиз подписывается отладочным, чтобы сборка
+            // не падала; перед публикацией файл keystore.properties должен
+            // существовать.
+            signingConfig keystorePropsFile.exists() ? signingConfigs.release : signingConfigs.debug
         }
     }
     // Раздельные сборки по архитектурам: телефон скачивает только свою,

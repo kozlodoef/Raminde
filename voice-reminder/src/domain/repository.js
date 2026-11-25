@@ -1,5 +1,5 @@
 import { assertDailyCapacity } from "./day-capacity.js";
-import { trialAccess, accessActive } from "./access.js";
+import { trialAccess } from "./access.js";
 import { registerPlugin } from "@capacitor/core";
 import { isNative } from "../lib/native.js";
 import {
@@ -93,6 +93,36 @@ export async function getState() {
   }
   return readWeb();
 }
+/**
+ * Только срабатывания — для частой проверки, пока приложение открыто.
+ *
+ * Полное состояние для этого слишком дорого: оно несёт все правила и
+ * настройки, которые меняются лишь действиями самого человека. Здесь нужен
+ * один список событий, чтобы заметить звонящее напоминание.
+ */
+export async function liveEvents() {
+  if (isNative()) return (await Native.events()).events || [];
+  return fireWeb().events || [];
+}
+/**
+ * Полное восстановление расписания нативным слоем.
+ *
+ * Отдельно от getState намеренно: состояние опрашивается каждые полторы
+ * секунды, и раньше каждый такой опрос заново читал все правила, пересчитывал
+ * расписание, писал в базу и переставлял будильники. Теперь восстановление
+ * происходит только там, где оно действительно нужно — при возврате в
+ * приложение и при открытии с уведомления.
+ */
+export async function restoreSchedule() {
+  if (!isNative()) return null;
+  try {
+    return await Native.restore();
+  } catch {
+    // Восстановление — страховка, а не основной путь: если нативный слой
+    // отказал, приложение всё равно должно открыться.
+    return null;
+  }
+}
 function saveWeb(state) {
   localStorage.setItem(KEY, JSON.stringify(state));
   return state;
@@ -123,12 +153,10 @@ export async function putReminder(
   const existing = s.reminders.find((r) => r.id === reminder.id);
   const month = localDate(new Date(), s.quota.timezone).slice(0, 7);
   if (month !== s.quota.month) s.quota = { ...s.quota, month, used: 0 };
-  if (
-    (!existing || reminder.enabled) &&
-    !reservation &&
-    !accessActive(s.access)
-  )
-    throw new Error("SUBSCRIPTION");
+  // Стены «пробный месяц закончился» здесь больше нет: напоминания
+  // сохраняются всегда, а ограничивает их только дневной предел, который
+  // проверяется выше. Так приложение не перестаёт работать на тридцать
+  // первый день — раньше именно это и происходило.
   const next = nextOccurrences(reminder.schedule, Date.now(), 1)[0];
   // Прошедшее правило править можно.
   //

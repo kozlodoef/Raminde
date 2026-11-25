@@ -1,0 +1,30 @@
+# Зависимости и результаты сборки
+node_modules/
+dist/
+build/
+
+# Android
+android/app/build/
+android/build/
+android/.gradle/
+android/local.properties
+android/capacitor-cordova-android-plugins/
+
+# Ключ подписи: пароль от него в открытом виде — это возможность выпустить
+# обновление от вашего имени. Хранится отдельно, вне репозитория.
+android/keystore/keystore.properties
+android/keystore/release.jks
+
+# Модели распознавания речи весят около 71 МБ. Держать их в обычном git
+# расточительно: каждый коммит копирует их целиком в историю.
+android/app/src/main/assets/*.onnx
+android/app/src/main/assets/*.bin
+
+# Отладочные артефакты, которым не место в сборке приложения
+public/compare.html
+
+# Служебное
+.vite/
+*.log
+.DS_Store
+Thumbs.db

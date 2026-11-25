@@ -1,6 +1,14 @@
 /* Remind me — Paper / Sky. Inspired by Tenner and Calder Bay Marathon.
    Presentation only: recording, scheduling, dates and data are unchanged. */
 :root {
+  /*
+   * Единственное объявление color-scheme.
+   *
+   * Раньше оно было дважды: light dark в styles.css и light здесь. Из-за
+   * этого системные элементы (полосы прокрутки, поля ввода, календарь
+   * выбора даты) оставались светлыми при тёмной теме приложения. Значение
+   * переключается вместе с data-theme.
+   */
   color-scheme: light;
   --bg: #f5f0e6;
   --surface: #fffcf5;

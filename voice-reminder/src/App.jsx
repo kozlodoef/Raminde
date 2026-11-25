@@ -17,6 +17,8 @@ import Calendar from "./PlannerCalendar.jsx";
 import { assertDailyCapacity } from "./domain/day-capacity.js";
 import {
   getState,
+  liveEvents,
+  restoreSchedule,
   setSettings,
   putReminder,
   deleteReminder,
@@ -46,6 +48,7 @@ import {
 } from "./domain/groups.js";
 import {
   accessActive,
+  dailyLimit,
   dateSpeechEnabled,
   isPro,
 } from "./domain/access.js";
@@ -68,6 +71,7 @@ import DeleteGroupModal from "./components/DeleteGroupModal.jsx";
 import ScopeModal from "./components/ScopeModal.jsx";
 import FlipTimePicker from "./components/FlipTimePicker.jsx";
 import AccessModal from "./components/AccessModal.jsx";
+import PrivacyModal from "./components/PrivacyModal.jsx";
 import {
   occurrenceScope,
   scopeWording,
@@ -170,6 +174,25 @@ export default function App() {
       if (mounted.current) setMessage(e.message);
     }
   };
+  // Частая проверка «не звенит ли прямо сейчас».
+  //
+  // В нативной версии она берёт только список срабатываний: полное состояние
+  // несёт все правила и настройки, а они меняются лишь действиями самого
+  // человека. В веб-версии проверка остаётся полной — там она же двигает
+  // расписание, без неё напоминания не срабатывают вовсе.
+  const tick = async () => {
+    if (saving.current) return;
+    if (!isNative()) return refresh();
+    try {
+      const events = await liveEvents();
+      setState((prev) =>
+        prev && !saving.current ? { ...prev, events } : prev,
+      );
+    } catch {
+      // Проверка идёт каждые полторы секунды: сообщать о каждой неудаче
+      // нельзя, иначе экран засыпало бы ошибками при сворачивании.
+    }
+  };
   useEffect(() => {
     mounted.current = true;
     primeAudio();
@@ -177,14 +200,26 @@ export default function App() {
     permissions()
       .then(setPerms)
       .catch(() => {});
+    // Восстановление расписания — один раз при запуске, вне опроса.
+    // Раньше оно происходило внутри каждой проверки состояния, то есть
+    // каждые полторы секунды: на бюджетных телефонах это заметно.
+    restoreSchedule();
     const id = setInterval(() => {
-      if (!document.hidden) refresh();
+      if (!document.hidden) tick();
     }, 1500);
+    // Полное состояние — реже: раз в двадцать секунд достаточно, чтобы
+    // заметить правку, сделанную в другом окне или при отложенном сигнале.
+    const full = setInterval(() => {
+      if (!document.hidden) refresh();
+    }, 20000);
     const visible = () => {
       if (document.hidden) {
         cancelRecording();
         setCreating(false);
       } else {
+        // Возврат в приложение — как раз тот случай, когда расписание надо
+        // пересчитать: телефон мог пробыть в глубоком сне.
+        restoreSchedule();
         refresh();
         permissions()
           .then(setPerms)
@@ -195,13 +230,39 @@ export default function App() {
     return () => {
       mounted.current = false;
       clearInterval(id);
+      clearInterval(full);
       cancelRecording();
       document.removeEventListener("visibilitychange", visible);
     };
   }, []);
   useEffect(() => {
-    if (state) document.documentElement.dataset.theme = state.settings.theme;
-  }, [state?.settings.theme]);
+    if (!state) return;
+    const theme = state.settings.theme;
+    document.documentElement.dataset.theme = theme;
+    // Статус-бар Android.
+    //
+    // theme-color в index.html привязан к системной теме, а настройка
+    // приложения может с ней не совпадать: при «тёмной в приложении,
+    // светлой в системе» полоса статуса оставалась светлой и спорила с
+    // фоном экрана. Цвет берём из вычисленного фона — тогда он всегда
+    // совпадает с тем, что человек видит.
+    const bg = getComputedStyle(document.documentElement)
+      .getPropertyValue("--bg")
+      .trim();
+    const dark =
+      theme === "dark" ||
+      (theme === "system" &&
+        window.matchMedia?.("(prefers-color-scheme: dark)").matches);
+    document
+      .querySelectorAll('meta[name="theme-color"]')
+      .forEach((m) => m.remove());
+    const meta = document.createElement("meta");
+    meta.name = "theme-color";
+    meta.content = bg || (dark ? "#0d1923" : "#f5f0e6");
+    document.head.appendChild(meta);
+    // Флаг для CSS: в тёмной теме нужны светлые системные значки.
+    document.documentElement.dataset.scheme = dark ? "dark" : "light";
+  }, [state?.settings.theme, !!state]);
   useEffect(() => {
     if (state && !state.settings.onboarded) setModal("welcome");
   }, [!!state]);
@@ -214,6 +275,56 @@ export default function App() {
   useEffect(() => {
     datesFromSpeech.current = dateSpeechEnabled(bill);
   }, [bill]);
+  // Системная кнопка «Назад» на Android.
+  //
+  // Нативная сторона спрашивает эту функцию, потому что только веб-часть
+  // знает, открыто ли модальное окно, на какой вкладке человек и идёт ли
+  // запись. Возвращаем true, если назад есть куда идти, — тогда приложение
+  // не закрывается. Раньше кнопка закрывала его всегда, даже из «Событий».
+  //
+  // Порядок важен: сначала закрывается окно, потом диктовка, потом
+  // вкладка — от самого вложенного к самому внешнему.
+  const back = () => {
+    if (modal) {
+      // Подтверждение удаления возвращает в карточку, а не на экран:
+      // иначе человек терял контекст и не понимал, что удалил.
+      setModal(modal === "delete" ? "event" : null);
+      return true;
+    }
+    if (voice !== "idle" || busy) {
+      cancelRecording();
+      setCreating(false);
+      setBusy(false);
+      return true;
+    }
+    if (tab !== "home") {
+      setTab("home");
+      setDayFilter(null);
+      setMessage("");
+      return true;
+    }
+    if (dayFilter) {
+      setDayFilter(null);
+      return true;
+    }
+    return false;
+  };
+  const backRef = useRef(back);
+  backRef.current = back;
+  useEffect(() => {
+    // Обработчик держит ссылку на актуальную функцию через ref: иначе
+    // пришлось бы переустанавливать его на каждое изменение состояния.
+    window.__remindeBack = () => {
+      try {
+        return backRef.current();
+      } catch {
+        return false;
+      }
+    };
+    return () => {
+      delete window.__remindeBack;
+    };
+  }, []);
   // Разбор дат включён всегда, поэтому ref не должен зависеть от ответа
   // платёжного сервера: dateSpeechEnabled() возвращает true.
   const alarm = state?.events.find((e) =>
@@ -709,7 +820,12 @@ export default function App() {
     let token;
     try {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
-      const s = await putReminder(r, { reservation: token });
+      // Предел на день передаётся в репозиторий явно: без подписки — три
+      // напоминания, с подпиской — техническая граница в 24.
+      const s = await putReminder(r, {
+        reservation: token,
+        maxPerDay: dailyLimit(bill),
+      });
       const stored = s?.reminders?.find((item) => item.id === r.id);
       if (
         !stored ||
@@ -759,10 +875,11 @@ export default function App() {
         allowPast: state?.reminders.some((r) => r.id === current.id),
       });
       // Проверяем до сохранения, чтобы сообщение появилось сразу и в том же
-      // виде, что и при сохранении. Лимит версии снят: проверяется только
-      // технический максимум на день (24 — по числу часов).
+      // виде, что и при сохранении. Без подписки предел — три напоминания в
+      // день, с подпиской — технический максимум 24 (по числу часов).
       assertDailyCapacity(state.reminders, [rule], {
         events: state.events,
+        maxPerDay: dailyLimit(bill),
       });
       await persist(rule);
       const fresh = blank(
@@ -776,22 +893,17 @@ export default function App() {
       // При успехе пузыря не показываем: человек видит, что поле очистилось
       // и напоминание ушло в список. Всплывающее сообщение — только про сбой.
       //
-      // Исключение — дата. В бесплатной версии она берётся только с
-      // календаря, а если её не отметили, напоминание встаёт на сегодня.
-      // Молчать об этом нельзя: сказанное «завтра» осталось бы у человека
-      // в голове, а сработало бы сегодня. Но это и не ошибка — поэтому
-      // пояснение идёт тихой строкой под полем, а не пузырём поверх экрана.
-      setNote(isPro(bill) ? "" : dateNote(current));
+      // Исключение — дата. Если её не назвали голосом и не отметили на
+      // календаре, напоминание встаёт на сегодня. Молчать об этом нельзя:
+      // сказанное «завтра» осталось бы у человека в голове, а сработало бы
+      // сегодня. Но это и не ошибка — поэтому пояснение идёт тихой строкой
+      // под полем, а не пузырём поверх экрана.
+      setNote(dateNote(current));
       setMessage("");
       setEditing(null);
     } catch (e) {
       setCreating(false);
-      setMessage(
-        e.message === "SUBSCRIPTION"
-          ? "Пробный месяц закончился. Нужна подписка."
-          : e.message,
-      );
-      if (e.message === "SUBSCRIPTION") setModal("access");
+      setMessage(e.message);
     } finally {
       saving.current = false;
       setBusy(false);
@@ -1274,22 +1386,36 @@ export default function App() {
               <h2>Доступ</h2>
               <p>
                 {bill?.premium
-                  ? "Подписка активна"
+                  ? "Подписка активна — предел на день снят"
                   : active
-                    ? `Первый месяц бесплатно · осталось ${daysLeft} дн.`
-                    : "Пробный месяц завершён"}
+                    ? `Подписка не оформлена. Первый месяц бесплатно · осталось ${daysLeft} дн.`
+                    : `Без подписки — до ${FREE_REMINDERS_PER_DAY} напоминаний в день`}
               </p>
               <p className="hint">
-                Все возможности доступны без ограничений: даты словами
-                («завтра», «двадцать пятого декабря»), несколько дат на
-                событие и любое число напоминаний в день. Сохранённые
-                напоминания продолжают работать.
+                Голос, даты словами («завтра», «двадцать пятого декабря»),
+                несколько дат на событие и напоминания на любой срок доступны
+                всем. Подписка снимает только дневной предел: с ней можно
+                ставить до 24 напоминаний в день. Сохранённые напоминания
+                работают при любом состоянии подписки.
               </p>
               <button
                 className="secondary full"
                 onClick={() => setModal("access")}
               >
                 Подписка и восстановление
+              </button>
+            </div>
+            <div className="settings-card">
+              <h2>Данные и конфиденциальность</h2>
+              <p className="hint">
+                Напоминания, настройки и статистика хранятся только на этом
+                телефоне. Текст напоминаний никуда не отправляется.
+              </p>
+              <button
+                className="secondary full"
+                onClick={() => setModal("privacy")}
+              >
+                Политика конфиденциальности
               </button>
             </div>
             <div className="settings-card">
@@ -1577,6 +1703,7 @@ export default function App() {
           }}
         />
       )}
+      {modal === "privacy" && <PrivacyModal onClose={() => setModal(null)} />}
       {modal === "access" && (
         <AccessModal
           billingConfigured={billingConfigured}

@@ -8,9 +8,39 @@ public class ReminderPlugin extends Plugin {
  @Override protected void handleOnResume(){AlarmScheduler.restore(getContext());}
  @PluginMethod public void getBillingCredential(PluginCall call){try{call.resolve(new JSObject().put("token",SecretVault.get(getContext())));}catch(Exception e){call.reject("Не удалось прочитать ключ восстановления");}}
  @PluginMethod public void setBillingCredential(PluginCall call){try{SecretVault.set(getContext(),call.getString("token",""));call.resolve();}catch(Exception e){call.reject("Не удалось сохранить ключ восстановления");}}
- @PluginMethod public void getState(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){AlarmScheduler.restore(getContext(),"app_open");call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
+ @PluginMethod public void getState(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
+ /**
+  * Только срабатывания, без правил и настроек.
+  *
+  * Нужен для частой проверки «не прозвенело ли что-то прямо сейчас», пока
+  * приложение открыто. Полное состояние для этого слишком дорого: оно несёт
+  * все правила, записи о срабатываниях и настройки, а меняется при этом
+  * только список срабатываний. Правила меняются лишь действиями самого
+  * пользователя, и после них состояние обновляется ответом на сохранение.
+  */
+ @PluginMethod public void events(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){JSONArray list=db.all("events");com.getcapacitor.JSArray out=new com.getcapacitor.JSArray();for(int i=0;i<list.length();i++){JSONObject e=list.optJSONObject(i);if(e!=null)out.put(JSObject.fromJSONObject(e));}JSObject r=new JSObject();r.put("events",out);call.resolve(r);}catch(Exception e){call.reject(e.getMessage());}}
+ /**
+  * Полное восстановление расписания по явному запросу.
+  *
+  * Раньше это делалось внутри getState, а состояние опрашивается каждые
+  * полторы секунды при открытом приложении. Выходило, что каждые полторы
+  * секунды приложение читало все правила, пересчитывало расписание, писало
+  * обратно в базу и заново ставило будильники. На бюджетных телефонах это
+  * заметно. Теперь восстановление — отдельный вызов, и делается оно там,
+  * где действительно нужно: при возврате в приложение и после загрузки.
+  */
+ @PluginMethod public void restore(PluginCall call){try{AlarmScheduler.restore(getContext(),"manual");try(ReminderStore db=new ReminderStore(getContext())){call.resolve(JSObject.fromJSONObject(db.state()));}}catch(Exception e){call.reject(e.getMessage());}}
  @PluginMethod public void settings(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){JSObject s=call.getObject("settings");if(s==null){call.reject("Нет настроек");return;}db.meta("settings",s);call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
- @PluginMethod public void upsert(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){JSObject r=call.getObject("reminder");if(r==null||r.optString("id").isEmpty()||r.optString("text").trim().isEmpty())throw new IllegalArgumentException("Добавьте текст напоминания");String id=r.getString("id");JSONObject previous=db.rule(id);long next=ScheduleEngine.next(r.getJSONObject("schedule"),System.currentTimeMillis());if(r.optBoolean("enabled",true)&&next<=0&&previous==null)throw new IllegalArgumentException("Нет будущих дат");if(r.optBoolean("enabled",true)&&!AlarmScheduler.exact(getContext()))throw new IllegalArgumentException("Разрешите точные будильники");if(r.optBoolean("enabled",true)&&!NotificationManagerCompat.from(getContext()).areNotificationsEnabled())throw new IllegalArgumentException("Разрешите уведомления в Android");JSONObject q=db.quota();boolean fresh=previous==null;JSONObject access=db.access();if((fresh||r.optBoolean("enabled",true))&&access.optLong("trialEndsAt",0)<=System.currentTimeMillis()&&call.getString("reservation")==null){call.reject("SUBSCRIPTION");return;}
+ @PluginMethod public void upsert(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){JSObject r=call.getObject("reminder");if(r==null||r.optString("id").isEmpty()||r.optString("text").trim().isEmpty())throw new IllegalArgumentException("Добавьте текст напоминания");String id=r.getString("id");JSONObject previous=db.rule(id);long next=ScheduleEngine.next(r.getJSONObject("schedule"),System.currentTimeMillis());if(r.optBoolean("enabled",true)&&next<=0&&previous==null)throw new IllegalArgumentException("Нет будущих дат");if(r.optBoolean("enabled",true)&&!AlarmScheduler.exact(getContext()))throw new IllegalArgumentException("Разрешите точные будильники");if(r.optBoolean("enabled",true)&&!NotificationManagerCompat.from(getContext()).areNotificationsEnabled())throw new IllegalArgumentException("Разрешите уведомления в Android");
+  // Стены «пробный месяц закончился» здесь больше нет.
+  //
+  // Раньше на тридцать первый день сохранение отклонялось с SUBSCRIPTION, а
+  // кнопка оплаты в тестовой сборке никуда не вела — приложение просто
+  // переставало работать. Теперь без подписки действует дневной предел в три
+  // напоминания, и он проверяется в JS через assertDailyCapacity, где есть
+  // и подсказка, и дорога к подписке. Нативный слой сохраняет всегда:
+  // единственный источник правды о пределе — один, а не два.
+  JSONObject q=db.quota();boolean fresh=previous==null;
  db.getWritableDatabase().beginTransaction();try{AlarmScheduler.plan(getContext(),db,r);if(fresh){q.put("used",q.optInt("used")+1);db.meta("quota",q);}db.getWritableDatabase().setTransactionSuccessful();}finally{db.getWritableDatabase().endTransaction();}call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception e){call.reject(e.getMessage());}}
  @PluginMethod public void skip(PluginCall call){try(ReminderStore db=new ReminderStore(getContext())){String id=call.getString("id");Long at=call.getLong("at");JSONObject r=db.rule(id);if(r==null)throw new IllegalArgumentException("Напоминание не найдено");if(at==null||at<=System.currentTimeMillis())throw new IllegalArgumentException("Срабатывание уже началось: подтвердите или отложите его");JSONObject schedule=r.getJSONObject("schedule");JSONArray xs=schedule.optJSONArray("excludedInstants");if(xs==null)xs=new JSONArray();xs.put(at);schedule.put("excludedInstants",xs);AlarmScheduler.plan(getContext(),db,r);call.resolve(JSObject.fromJSONObject(db.state()));}catch(Exception ex){call.reject(ex.getMessage());}}
  /**

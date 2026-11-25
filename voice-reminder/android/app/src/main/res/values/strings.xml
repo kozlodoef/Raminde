@@ -1,7 +1,15 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Remind me</string>
-    <string name="title_activity_main">Remind me</string>
+    <!--
+      Название приложения на русском.
+
+      Было «Remind me» — английское. Закон о защите прав потребителей
+      (ФЗ-168) требует, чтобы информация для потребителя, включая название,
+      была на русском либо полностью дублирована. Витрина RuStore и подпись
+      под иконкой — первое, что проверяет модератор.
+    -->
+    <string name="app_name">Напомни</string>
+    <string name="title_activity_main">Напомни</string>
     <string name="package_name">ru.voicereminder.app</string>
     <string name="custom_url_scheme">ru.voicereminder.app</string>
 </resources>

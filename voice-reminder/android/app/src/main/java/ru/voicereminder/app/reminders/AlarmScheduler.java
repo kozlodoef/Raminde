@@ -42,6 +42,11 @@ public final class AlarmScheduler {
  public static void restore(Context c){restore(c,"app_resume");}
  public static void restore(Context c,String source){
   try(ReminderStore db=new ReminderStore(c)){
+   // Заодно убираем старые записи о срабатываниях. Подтверждённое
+   // срабатывание раньше оставалось в базе навсегда и копилось годами, а
+   // state() отдавал всё это в JS. Живые записи (звонящие, ждущие реакции и
+   // отложенные) не трогаются — это текущие напоминания.
+   try{db.pruneEvents(30);}catch(Exception ignored){}
    JSONObject status=db.meta("restoreStatus");
    status.put("source",source).put("startedAt",System.currentTimeMillis()).put("completedAt",JSONObject.NULL).put("scheduled",0).put("error",JSONObject.NULL);
    db.writeRestoreStatus(status);

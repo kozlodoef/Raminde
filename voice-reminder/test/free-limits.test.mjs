@@ -5,6 +5,8 @@ import { toggleEditorDate } from "../src/domain/home-editor.js";
 import { assertDailyCapacity } from "../src/domain/day-capacity.js";
 import {
   FREE_REMINDERS_PER_DAY,
+  MAX_REMINDERS_PER_DAY,
+  dailyLimit,
   isPro,
   dateSpeechEnabled,
 } from "../src/domain/access.js";
@@ -138,6 +140,68 @@ test("несколько времён в одном напоминании сч�
   assert.throws(
     () => assertDailyCapacity(existing, [reminder("b", "2026-12-01", ["23:30"])]),
     /напоминаний/,
+  );
+});
+
+// --- Предел бесплатной версии ---
+//
+// Три напоминания в день без подписки. Это мягкое ограничение вместо стены
+// «пробный месяц закончился»: уже созданное продолжает работать, а подписка
+// снимает предел до технических 24.
+
+test("без подписки — три напоминания в день", () => {
+  const two = [
+    reminder("a", "2026-12-01", ["09:00"]),
+    reminder("b", "2026-12-01", ["11:00"]),
+  ];
+  assert.doesNotThrow(() =>
+    assertDailyCapacity(two, [reminder("c", "2026-12-01", ["13:00"])], {
+      maxPerDay: FREE_REMINDERS_PER_DAY,
+    }),
+  );
+  const three = [...two, reminder("c", "2026-12-01", ["13:00"])];
+  assert.throws(
+    () =>
+      assertDailyCapacity(three, [reminder("d", "2026-12-01", ["15:00"])], {
+        maxPerDay: FREE_REMINDERS_PER_DAY,
+      }),
+    /предел подписки/,
+  );
+});
+
+test("подписка снимает предел до технических 24", () => {
+  assert.equal(dailyLimit({ premium: true }), MAX_REMINDERS_PER_DAY);
+  assert.equal(dailyLimit({ premium: false }), FREE_REMINDERS_PER_DAY);
+  assert.equal(dailyLimit(null), FREE_REMINDERS_PER_DAY);
+});
+
+test("уже сохранённые сверх предела не мешают правке", () => {
+  // Человек завёл десять напоминаний с подпиской, подписка кончилась.
+  // Править и удалять их он должен по-прежнему: иначе день не разобрать.
+  const existing = Array.from({ length: 10 }, (_, i) =>
+    reminder("s" + i, "2026-12-01", [String(i).padStart(2, "0") + ":00"]),
+  );
+  assert.doesNotThrow(() =>
+    assertDailyCapacity(existing, [{ ...existing[0], text: "Поправлено" }], {
+      maxPerDay: FREE_REMINDERS_PER_DAY,
+    }),
+  );
+});
+
+test("новый день без подписки по-прежнему ограничен", () => {
+  // Прошлый день переполнен подпиской — это не повод разрешать четвёртое
+  // напоминание на новом дне: предел считается по каждому дню отдельно.
+  const existing = Array.from({ length: 10 }, (_, i) =>
+    reminder("s" + i, "2026-12-01", [String(i).padStart(2, "0") + ":00"]),
+  );
+  assert.throws(
+    () =>
+      assertDailyCapacity(
+        existing,
+        [reminder("new", "2026-12-05", ["09:00", "12:00", "15:00", "18:00"])],
+        { maxPerDay: FREE_REMINDERS_PER_DAY },
+      ),
+    /предел подписки/,
   );
 });
 

@@ -17,7 +17,7 @@ export default function WelcomeModal({ name, onName, onStart }) {
       <p className="hint">
         Во время создания выбирайте даты на календаре. Чтобы очистить текст,
         нажмите крестик. Вне создания нажатие на дату открывает события дня.
-        Не более 12 срабатываний в день. Микрофон сам не включается.
+        Без подписки — до трёх напоминаний в день. Микрофон сам не включается.
       </p>
       <label className="field">
         Как к вам обращаться
@@ -28,8 +28,7 @@ export default function WelcomeModal({ name, onName, onStart }) {
         />
       </label>
       <p className="hint">
-        Первый месяц бесплатно, без ограничений. Без автоматических
-        списаний.
+        Первый месяц подписки — бесплатно. Без автоматических списаний.
       </p>
       <button className="primary full" onClick={onStart}>
         Начать

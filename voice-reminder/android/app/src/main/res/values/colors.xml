@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Цвета темы приложения.
+
+  Раньше этого файла не было вовсе: styles.xml ссылался на @color/colorPrimary
+  и другие, а определены они были только внутри библиотеки Capacitor.
+  Сборка держалась на наследстве от зависимости — стоило обновить её или
+  сменить, и компиляция ресурсов падала. Заодно цвета были стандартные
+  AppCompat (фиолетовый и розовый), никак не связанные с палитрой
+  приложения Paper / Sky.
+
+  Значения совпадают с переменными theme.css: navy #10243b и фон #f5f0e6.
+-->
+<resources>
+    <color name="colorPrimary">#10243b</color>
+    <color name="colorPrimaryDark">#0d1923</color>
+    <color name="colorAccent">#174e63</color>
+    <!-- Фон окна до первой отрисовки WebView. Тот же, что у приложения:
+         иначе при запуске на мгновение вспыхивает белое. -->
+    <color name="windowBackground">#f5f0e6</color>
+    <color name="windowBackgroundDark">#0d1923</color>
+</resources>

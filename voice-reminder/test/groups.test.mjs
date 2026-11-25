@@ -154,7 +154,11 @@ test("different scoped events cannot silently become a cross product", () =>
 
 test("implicit today is not an explicit selection after dictation", () =>
   assert.deepEqual(parseGroup("Принять таблетку в 20", [], now).dates, []));
-test("expired access blocks new creation but allows pausing saved reminders", async () => {
+test("expired trial no longer blocks saving: the wall is gone", async () => {
+  // Раньше на тридцать первый день сохранение отклонялось с SUBSCRIPTION, а
+  // кнопка оплаты в тестовой сборке никуда не вела — приложение просто
+  // переставало работать. Теперь напоминания сохраняются всегда: без
+  // подписки действует только дневной предел в три напоминания.
   const map = new Map();
   global.localStorage = {
     getItem: (k) => map.get(k) || null,
@@ -174,10 +178,8 @@ test("expired access blocks new creation but allows pausing saved reminders", as
       "raminde.v2",
       JSON.stringify({ ...r.emptyState(), access, reminders: [saved] }),
     );
-    await assert.rejects(
-      r.putReminder({ ...saved, id: "new" }),
-      /SUBSCRIPTION/,
-    );
+    const next = await r.putReminder({ ...saved, id: "new" });
+    assert.ok(next.reminders.some((x) => x.id === "new"));
     const paused = await r.putReminder({ ...saved, enabled: false });
     assert.equal(paused.reminders[0].enabled, false);
     assert.equal(paused.access.trialStartedAt, access.trialStartedAt);

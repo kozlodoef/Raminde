@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Тёмная версия системных цветов.
+
+  Раньше каталога values-night не было, и AppTheme оставалась светлой при
+  ночном режиме системы: окно до отрисовки WebView вспыхивало белым, а это
+  особенно заметно, если напоминание открывают ночью с заблокированного
+  экрана. Значения совпадают с тёмной палитрой theme.css.
+-->
+<resources>
+    <color name="colorPrimary">#172938</color>
+    <color name="colorPrimaryDark">#0d1923</color>
+    <color name="colorAccent">#7ed8f6</color>
+    <color name="windowBackground">#0d1923</color>
+</resources>

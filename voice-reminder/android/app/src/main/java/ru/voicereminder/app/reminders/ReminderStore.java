@@ -20,6 +20,32 @@ public final class ReminderStore extends SQLiteOpenHelper {
  public synchronized JSONObject access(){JSONObject a=meta("access");try{long start=a.optLong("trialStartedAt",0);if(start<=0){start=System.currentTimeMillis();a.put("trialStartedAt",start);}long end=Instant.ofEpochMilli(start).atZone(ZoneOffset.UTC).plusMonths(1).toInstant().toEpochMilli();a.put("trialEndsAt",end);meta("access",a);}catch(Exception e){diagnostic("Ошибка пробного периода: "+e.getMessage());}return a;}
  public synchronized JSONObject state(){JSONObject result=new JSONObject();try{result.put("reminders",all("rules"));result.put("events",all("events"));result.put("settings",meta("settings"));result.put("quota",quota());result.put("access",access());result.put("errors",meta("diagnostic"));JSONObject recovery=meta("restoreStatus");JSONObject boot=meta("bootSignal");int currentBoot=bootCount();recovery.put("bootConfirmed",currentBoot>=0&&boot.optInt("bootCount",-2)==currentBoot).put("bootReceivedAt",boot.optLong("receivedAt",0)).put("currentBootCount",currentBoot).put("appVersion",ru.voicereminder.app.BuildConfig.VERSION_NAME);recovery.put("bootRestore",meta("bootRestoreStatus"));result.put("recovery",recovery);}catch(Exception ignored){}return result;}
  public synchronized void removeRule(String id){getWritableDatabase().delete("rules","rid=?",new String[]{id});JSONArray events=all("events");for(int i=0;i<events.length();i++){JSONObject e=events.optJSONObject(i);if(e.optString("reminderId").equals(id))getWritableDatabase().delete("events","eid=?",new String[]{e.optString("id")});}}
+ /**
+  * Убирает старые записи о срабатываниях.
+  *
+  * Подтверждённое срабатывание раньше оставалось в базе навсегда: удалялось
+  * оно только вместе с правилом. Приложение с годами накапливало тысячи
+  * записей, а state() отдавал их целиком в JS каждые полторы секунды.
+  * Здесь остаются только недавние (их видно в календаре) и все живые —
+  * звонящие, ждущие реакции и отложенные: их трогать нельзя.
+  */
+ public synchronized int pruneEvents(int keepDays){
+  long edge=System.currentTimeMillis()-Math.max(1,keepDays)*86400000L;
+  int removed=0;
+  JSONArray events=all("events");
+  for(int i=0;i<events.length();i++){
+   JSONObject e=events.optJSONObject(i);if(e==null)continue;
+   String state=e.optString("state");
+   // Живые срабатывания не трогаем никогда: это текущий звонок или
+   // отложенное напоминание, которое ещё должно прозвучать.
+   if(!state.equals("acknowledged"))continue;
+   long at=e.optLong("scheduledAt",0);
+   if(at<=0||at>=edge)continue;
+   try{getWritableDatabase().delete("events","eid=?",new String[]{e.optString("id")});removed++;}
+   catch(Exception ignored){}
+  }
+  return removed;
+ }
  private int bootCount(){try{return android.provider.Settings.Global.getInt(context.getContentResolver(),android.provider.Settings.Global.BOOT_COUNT);}catch(Exception ex){return -1;}}
  public synchronized void writeRestoreStatus(JSONObject status)throws JSONException{meta("restoreStatus",status);if(Intent.ACTION_BOOT_COMPLETED.equals(status.optString("source")))meta("bootRestoreStatus",status);}
  public synchronized void recordRestoreSignal(String action)throws JSONException{if(Intent.ACTION_BOOT_COMPLETED.equals(action))meta("bootSignal",new JSONObject().put("bootCount",bootCount()).put("receivedAt",System.currentTimeMillis()));}

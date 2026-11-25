@@ -34,10 +34,13 @@
    * клавиатуру, а прокрутить к нему нельзя — нижние недели просто исчезают.
    *
    * --app-height выставляет viewport-height.js по visualViewport.
-   * Фолбэк на dvh нужен, если скрипт ещё не сработал.
+   * Фолбэк на dvh нужен, если скрипт ещё не сработал. Первая строка с vh —
+   * для WebView старше Chrome 108, где dvh неизвестен и объявление
+   * отбрасывается целиком. Сборщик схлопывает повторы, поэтому vh объявлен
+   * здесь, а dvh — отдельным правилом в @supports в конце файла.
    */
-  height: 100dvh;
-  height: var(--app-height, 100dvh);
+  height: 100vh;
+  height: var(--app-height, 100vh);
   min-height: 0;
   padding: max(10px, env(safe-area-inset-top)) 16px
     max(12px, env(safe-area-inset-bottom));
@@ -398,5 +401,23 @@
   }
   .focus-record {
     transition: none;
+  }
+}
+
+/*
+ * Высота с dvh — отдельным правилом, а не второй строкой.
+ *
+ * Сборщик схлопывает повторные объявления одного свойства и выбрасывает
+ * вариант с vh как устаревший: проверено на собранном файле — 100vh
+ * исчезал полностью. Условие @supports проверяется во время работы,
+ * поэтому запасной vh доживает до всех остальных устройств.
+ */
+@supports (height: 100dvh) {
+  .home-screen .planner-content,
+  .planner.home-screen {
+    height: 100dvh;
+  }
+  .planner.home-screen {
+    height: var(--app-height, 100dvh);
   }
 }

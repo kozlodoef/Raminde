@@ -1,22 +1,43 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
-        <!-- Customize your theme here. -->
+    <!-- Базовая тема приложения. -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="colorPrimary">@color/colorPrimary</item>
         <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
         <item name="colorAccent">@color/colorAccent</item>
+        <item name="android:windowBackground">@color/windowBackground</item>
+        <!--
+          Клавиатура и системные панели красятся в цвет фона приложения:
+          без этого под полем ввода мелькала белая полоса, а на Android 15
+          с принудительным edge-to-edge это особенно заметно.
+        -->
+        <item name="android:navigationBarColor">@color/windowBackground</item>
+        <item name="android:statusBarColor">@color/windowBackground</item>
     </style>
 
     <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="windowActionBar">false</item>
         <item name="windowNoTitle">true</item>
         <item name="android:background">@null</item>
+        <item name="android:windowBackground">@color/windowBackground</item>
     </style>
 
+    <!--
+      Тема запуска.
 
+      Раньше здесь стоял Theme.SplashScreen с windowBackground = @drawable/splash,
+      но postSplashScreenTheme не задавался и installSplashScreen() не
+      вызывался. В результате API сплэша не работал, а картинка 480×320
+      растягивалась на весь экран: на Android 12+ сначала показывался
+      системный сплэш с иконкой, потом наш PNG — двойное мигание.
+
+      Теперь просто фон цвета приложения и системная иконка: один экран
+      вместо двух, и переход к WebView незаметен.
+    -->
     <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
-        <item name="android:background">@drawable/splash</item>
+        <item name="android:windowBackground">@color/windowBackground</item>
+        <item name="postSplashScreenTheme">@style/AppTheme.NoActionBar</item>
+        <item name="windowSplashScreenBackground">@color/windowBackground</item>
     </style>
 </resources>
