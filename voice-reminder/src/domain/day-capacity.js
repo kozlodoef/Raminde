@@ -1,6 +1,13 @@
 import { localDate } from "./calendar.js";
 import { occurrencesInMonth } from "./groups.js";
-export const MAX_DAILY_EVENTS = 12;
+/**
+ * Максимум напоминаний на один день.
+ *
+ * Это техническая граница, а не ограничение версии: в сутках 24 часа, и
+ * больше 24 отдельных напоминаний на один день поставить нельзя. Раньше
+ * здесь стояло 12, и это упиралось в обычный плотный день.
+ */
+export const MAX_DAILY_EVENTS = 24;
 // Equal segments represent occurrences; a group with three times uses three segments of its colour.
 export function daySegments(
   occurrences,
@@ -43,9 +50,7 @@ export function assertDailyCapacity(
   // том, что он что-то сделал неправильно.
   const limit = Number.isFinite(maxPerDay) ? maxPerDay : MAX_DAILY_EVENTS;
   const limitMessage = (date, count) =>
-    limit < MAX_DAILY_EVENTS
-      ? `На ${date.split("-").reverse().join(".")} получится ${count} напоминания. В бесплатной версии — не больше ${limit} в день. Больше — в ПРО-версии.`
-      : `На ${date.split("-").reverse().join(".")} получится ${count} событий. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`;
+    `На ${date.split("-").reverse().join(".")} получится ${count} напоминаний. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`;
   const months = new Set();
   let recurring = false;
   for (const r of enabled) {

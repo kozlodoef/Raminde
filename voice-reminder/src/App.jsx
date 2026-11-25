@@ -48,7 +48,6 @@ import {
   accessActive,
   dateSpeechEnabled,
   isPro,
-  FREE_REMINDERS_PER_DAY,
 } from "./domain/access.js";
 import {
   billingConfigured,
@@ -114,6 +113,9 @@ export default function App() {
     // Какая карточка сейчас правит время и что в ней введено.
     [editingTime, setEditingTime] = useState(null),
     [timeEdits, setTimeEdits] = useState({}),
+    // Правка времени сразу на всех датах: { rule, event }. Нужна, чтобы
+    // «Изменить время везде» меняло время на месте, а не уводило на главную.
+    [editingTimeAll, setEditingTimeAll] = useState(null),
     // Поле ввода в фокусе: подсказка на это время скрывается.
     [editorFocused, setEditorFocused] = useState(false),
     // Карточки, которые сейчас уезжают вправо после удаления.
@@ -580,10 +582,67 @@ export default function App() {
       setMessage(e.message);
     }
   }
-  /** Открывает редактор группы: смена времени сразу на всех датах. */
-  function changeTimeAll(rule) {
-    editRule(rule);
-    setMessage("");
+  /**
+   * Меняет время на всех датах правила.
+   *
+   * Раньше здесь открывался редактор главной (editRule): человека
+   * перебрасывало на другой экран с полем ввода, хотя он просил только
+   * поправить время. Теперь время меняется на месте, в той же карточке:
+   * открывается то же перекидное поле, что и для одного дня, но применённое
+   * ко всем датам сразу.
+   */
+  function changeTimeAll(rule, entry) {
+    setEditingTimeAll({ rule, event: entry });
+    setTimeEdits((v) => ({ ...v, [entry.id]: entry.time }));
+  }
+  /**
+   * Применяет новое время ко всем датам правила.
+   *
+   * Старое время заменяется новым во всём списке: если было «09:00 и 12:00»,
+   * а человек поменял 09:00 на 10:00, станет «10:00 и 12:00». Так же
+   * снимаются отметки о пропущенных срабатываниях на старом времени —
+   * иначе перенесённое время могло оказаться исключённым.
+   */
+  async function applyTimeEverywhere() {
+    const target = editingTimeAll;
+    if (!target) return;
+    const { rule, event } = target;
+    const time = timeEdits[event.id];
+    if (!time || !/^\d{1,2}:\d{2}$/.test(time)) {
+      setMessage("Укажите время в формате чч:мм, например 19:30.");
+      return;
+    }
+    const [h, m] = time.split(":").map(Number);
+    if (h > 23 || m > 59) {
+      setMessage("Такого времени не бывает: часы 0–23, минуты 0–59.");
+      return;
+    }
+    try {
+      const times = [...new Set(rule.schedule.times || [])];
+      const nextTimes = [...new Set(times.map((t) => (t === event.time ? time : t)))].sort();
+      const shifted = {
+        ...rule,
+        schedule: {
+          ...rule.schedule,
+          kind: "dates",
+          times: nextTimes,
+          // Отметки о пропуске относились к старому времени: после переноса
+          // они бы указывали на момент, которого больше нет.
+          excludedInstants: [],
+        },
+      };
+      setState(await putReminder(shifted));
+      setEditingTimeAll(null);
+      setTimeEdits((v) => {
+        const next = { ...v };
+        delete next[event.id];
+        return next;
+      });
+      setMessage("");
+      playUiSound("confirm", { enabled: settings.uiSounds !== false });
+    } catch (e) {
+      setMessage(e.message);
+    }
   }
   /**
    * Удаляет все напоминания выбранного дня.
@@ -650,11 +709,7 @@ export default function App() {
     let token;
     try {
       if (billingConfigured) token = (await reserveQuota(r.id)).token;
-      const s = await putReminder(r, {
-        reservation: token,
-        // В бесплатной версии — не больше трёх напоминаний в день.
-        ...(isPro(bill) ? {} : { maxPerDay: FREE_REMINDERS_PER_DAY }),
-      });
+      const s = await putReminder(r, { reservation: token });
       const stored = s?.reminders?.find((item) => item.id === r.id);
       if (
         !stored ||
@@ -704,11 +759,10 @@ export default function App() {
         allowPast: state?.reminders.some((r) => r.id === current.id),
       });
       // Проверяем до сохранения, чтобы сообщение появилось сразу и в том же
-      // виде, что и при сохранении: в бесплатной версии — не больше трёх
-      // напоминаний в день.
+      // виде, что и при сохранении. Лимит версии снят: проверяется только
+      // технический максимум на день (24 — по числу часов).
       assertDailyCapacity(state.reminders, [rule], {
         events: state.events,
-        ...(isPro(bill) ? {} : { maxPerDay: FREE_REMINDERS_PER_DAY }),
       });
       await persist(rule);
       const fresh = blank(
@@ -1068,6 +1122,28 @@ export default function App() {
                           onCancel={() => setEditingTime(null)}
                         />
                       )}
+                      {/* Правка времени сразу на всех датах этой группы.
+                          Отдельная панель, потому что действие другое:
+                          меняются все даты, а не один день. */}
+                      {editingTimeAll?.event?.id === e.id && (
+                        <FlipTimePicker
+                          value={timeEdits[e.id] || e.time}
+                          soundEnabled={settings.uiSounds !== false}
+                          note="Новое время применится ко всем датам этого напоминания."
+                          onChange={(v) =>
+                            setTimeEdits((prev) => ({ ...prev, [e.id]: v }))
+                          }
+                          onDone={applyTimeEverywhere}
+                          onCancel={() => {
+                            setEditingTimeAll(null);
+                            setTimeEdits((prev) => {
+                              const next = { ...prev };
+                              delete next[e.id];
+                              return next;
+                            });
+                          }}
+                        />
+                      )}
                     </article>
                   );
                 })}
@@ -1204,9 +1280,10 @@ export default function App() {
                     : "Пробный месяц завершён"}
               </p>
               <p className="hint">
-                {isPro(bill)
-                  ? "Без ограничений: любое число напоминаний в день."
-                  : `Бесплатно: до ${FREE_REMINDERS_PER_DAY} напоминаний в день. Всё остальное без ограничений — даты словами («завтра», «двадцать пятого декабря»), несколько дат на событие, любое число напоминаний в другие дни. Сохранённые напоминания продолжают работать.`}
+                Все возможности доступны без ограничений: даты словами
+                («завтра», «двадцать пятого декабря»), несколько дат на
+                событие и любое число напоминаний в день. Сохранённые
+                напоминания продолжают работать.
               </p>
               <button
                 className="secondary full"
@@ -1428,7 +1505,7 @@ export default function App() {
             playUiSound("confirm", { enabled: settings.uiSounds !== false });
           }}
           onAll={async () => {
-            const { action, rule } = scope;
+            const { action, rule, event } = scope;
             setModal(null);
             setScope(null);
             try {
@@ -1440,8 +1517,10 @@ export default function App() {
                 // Карточки уже нет — подтверждение пузырём не нужно.
                 setMessage("");
               } else {
+                // Время меняем на месте: человек просил поправить время, а не
+                // открыть редактор на другом экране.
                 playUiSound("edit", { enabled: settings.uiSounds !== false });
-                changeTimeAll(rule);
+                changeTimeAll(rule, event);
               }
             } catch (e) {
               setMessage(e.message);

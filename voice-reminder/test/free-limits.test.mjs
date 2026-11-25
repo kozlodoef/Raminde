@@ -62,84 +62,82 @@ test("после снятия можно выбрать другую", () => {
   assert.deepEqual(r.draft.selectedDates, ["2026-12-05"]);
 });
 
-// --- Не больше трёх напоминаний в день в бесплатной версии ---
+// --- Предел на день ---
+//
+// Лимит «три напоминания в день» снят: он мешал в обычный плотный день.
+// Осталась только техническая граница — 24 (по числу часов в сутках).
 
-test("бесплатная версия: три напоминания в день проходят", () => {
+test("пять напоминаний в день проходят", () => {
   const existing = [
     reminder("a", "2026-12-01", ["09:00"]),
-    reminder("b", "2026-12-01", ["12:00"]),
+    reminder("b", "2026-12-01", ["11:00"]),
+    reminder("c", "2026-12-01", ["13:00"]),
+    reminder("d", "2026-12-01", ["15:00"]),
   ];
   assert.doesNotThrow(() =>
-    assertDailyCapacity(existing, [reminder("c", "2026-12-01", ["15:00"])], {
-      maxPerDay: FREE_REMINDERS_PER_DAY,
-    }),
+    assertDailyCapacity(existing, [reminder("e", "2026-12-01", ["17:00"])]),
   );
 });
 
-test("бесплатная версия: четвёртое напоминание в день отклоняется", () => {
-  const existing = [
-    reminder("a", "2026-12-01", ["09:00"]),
-    reminder("b", "2026-12-01", ["12:00"]),
-    reminder("c", "2026-12-01", ["15:00"]),
-  ];
+test("двадцать четыре напоминания в день проходят", () => {
+  const times = Array.from({ length: 23 }, (_, i) =>
+    String(i).padStart(2, "0") + ":00",
+  );
+  const existing = [reminder("a", "2026-12-01", times)];
+  assert.doesNotThrow(() =>
+    assertDailyCapacity(existing, [reminder("b", "2026-12-01", ["23:00"])]),
+  );
+});
+
+test("двадцать пятое напоминание в день отклоняется", () => {
+  const times = Array.from({ length: 24 }, (_, i) =>
+    String(i).padStart(2, "0") + ":00",
+  );
   assert.throws(
     () =>
-      assertDailyCapacity(existing, [reminder("d", "2026-12-01", ["18:00"])], {
-        maxPerDay: FREE_REMINDERS_PER_DAY,
-      }),
-    /ПРО-версии/,
+      assertDailyCapacity([reminder("a", "2026-12-01", times)], [
+        reminder("b", "2026-12-02", ["08:00"]),
+        reminder("c", "2026-12-01", ["23:59"]),
+      ]),
+    /напоминаний/,
   );
 });
 
-test("сообщение об ограничении говорит про ПРО-версию", () => {
-  const existing = [
-    reminder("a", "2026-12-01", ["09:00"]),
-    reminder("b", "2026-12-01", ["12:00"]),
-    reminder("c", "2026-12-01", ["15:00"]),
-  ];
+test("в сообщении нет упоминания версии", () => {
+  // Одна цель: человек видит, что предел технический, а не «купите ПРО».
+  const times = Array.from({ length: 24 }, (_, i) =>
+    String(i).padStart(2, "0") + ":00",
+  );
   try {
-    assertDailyCapacity(existing, [reminder("d", "2026-12-01", ["18:00"])], {
-      maxPerDay: FREE_REMINDERS_PER_DAY,
-    });
+    assertDailyCapacity([reminder("a", "2026-12-01", times)], [
+      reminder("c", "2026-12-01", ["23:59"]),
+    ]);
     assert.fail("должно было отклонить");
   } catch (e) {
-    assert.match(e.message, /не больше 3 в день/);
-    assert.match(e.message, /ПРО-версии/);
+    assert.ok(!/ПРО/i.test(e.message), "упоминание ПРО осталось: " + e.message);
+    assert.match(e.message, /Максимум — 24/);
   }
 });
 
-test("ПРО: четвёртое напоминание в день проходит", () => {
-  const existing = [
-    reminder("a", "2026-12-01", ["09:00"]),
-    reminder("b", "2026-12-01", ["12:00"]),
-    reminder("c", "2026-12-01", ["15:00"]),
-  ];
-  assert.doesNotThrow(() =>
-    assertDailyCapacity(existing, [reminder("d", "2026-12-01", ["18:00"])]),
-  );
-});
-
 test("лимит считается по дням отдельно", () => {
-  const existing = [
-    reminder("a", "2026-12-01", ["09:00"]),
-    reminder("b", "2026-12-01", ["12:00"]),
-    reminder("c", "2026-12-01", ["15:00"]),
-  ];
+  const times = Array.from({ length: 24 }, (_, i) =>
+    String(i).padStart(2, "0") + ":00",
+  );
+  const existing = [reminder("a", "2026-12-01", times)];
   assert.doesNotThrow(() =>
-    assertDailyCapacity(existing, [reminder("d", "2026-12-02", ["09:00"])], {
-      maxPerDay: FREE_REMINDERS_PER_DAY,
-    }),
+    assertDailyCapacity(existing, [reminder("d", "2026-12-02", ["09:00"])]),
   );
 });
 
 test("несколько времён в одном напоминании считаются отдельными событиями", () => {
-  const existing = [reminder("a", "2026-12-01", ["09:00", "12:00", "15:00"])];
+  // 24 времени в одном правиле уже занимают весь день; ещё одно — перебор.
+  const times = Array.from({ length: 24 }, (_, i) =>
+    String(i).padStart(2, "0") + ":00",
+  );
+  const existing = [reminder("a", "2026-12-01", times)];
   assert.throws(
-    () =>
-      assertDailyCapacity(existing, [reminder("b", "2026-12-01", ["18:00"])], {
-        maxPerDay: FREE_REMINDERS_PER_DAY,
-      }),
-    /ПРО-версии/,
+    () => assertDailyCapacity(existing, [reminder("b", "2026-12-01", ["23:30"])]),
+    /напоминаний/,
   );
 });
 

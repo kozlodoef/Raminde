@@ -59,6 +59,7 @@ export default function FlipTimePicker({
   onDone,
   onCancel,
   soundEnabled = true,
+  note,
 }) {
   const [digits, setDigits] = useState(() => parseTimeDigits(value));
 
@@ -77,6 +78,9 @@ export default function FlipTimePicker({
 
   return (
     <div className="flip-picker">
+      {/* Пояснение нужно там, где правка затрагивает не один день: человек
+          должен видеть это до нажатия «Готово», а не после. */}
+      {note && <p className="flip-note">{note}</p>}
       <div className="flip-row">
         {digits.map((d, i) => (
           <React.Fragment key={i}>

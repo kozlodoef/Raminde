@@ -130,7 +130,14 @@ export async function putReminder(
   )
     throw new Error("SUBSCRIPTION");
   const next = nextOccurrences(reminder.schedule, Date.now(), 1)[0];
-  if (reminder.enabled && !next)
+  // Прошедшее правило править можно.
+  //
+  // Раньше здесь требовалось будущее срабатывание, и напоминание, которое
+  // уже сработало, нельзя было ни исправить, ни переименовать: оставалось
+  // только удалить. Теперь достаточно, чтобы само правило было рабочим:
+  // если у него нет будущих дат, оно просто не сработает, но текст и время
+  // в нём уже можно поправить.
+  if (reminder.enabled && !next && !existing)
     throw new Error("Нет будущих дат для этого расписания");
   s.reminders = existing
     ? s.reminders.map((r) =>
