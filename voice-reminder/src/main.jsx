@@ -6,6 +6,9 @@ import "./styles.css";
 import "./theme-fonts.css";
 import "./theme.css";
 import "./focus-home.css";
+// Единый вид разделов и элементов формы. Идёт последним: его правила
+// перекрывают ранние слои без !important — см. комментарий в самом файле.
+import "./sections.css";
 import { watchViewportHeight } from "./lib/viewport-height.js";
 
 // Высота приложения считается по видимой области, а не по окну. На телефоне

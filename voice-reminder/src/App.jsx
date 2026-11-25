@@ -1090,7 +1090,7 @@ export default function App() {
                   setMessage("");
                 }}
               >
-                ← Главная
+                ← Назад
               </button>
             </header>
             {/* День и число событий. Переключателя месяца здесь больше нет:
@@ -1286,7 +1286,7 @@ export default function App() {
                   setMessage("");
                 }}
               >
-                ← Главная
+                ← Назад
               </button>
             </header>
             <div className="settings-card">

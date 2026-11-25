@@ -1,0 +1,462 @@
+/* sections.css — единый вид разделов: «События», «Настройки», окна.
+ *
+ * Зачем отдельный файл. Разделы собирались по очереди, и каждый приносил
+ * свои размеры заголовков, свои отступы у карточек и свои кнопки. В итоге
+ * «События» и «Настройки» выглядели как два разных приложения: заголовок
+ * одного 26 px, другого 42 px, карточки с разной внутренней плотностью,
+ * а элементы формы — системные, из базового Android.
+ *
+ * Здесь собрано то, что должно быть одинаковым везде. Файл подключается
+ * последним (см. main.jsx), поэтому его правила перекрывают ранние слои без
+ * !important и без повышения специфичности.
+ *
+ * Палитра и шрифты берутся из theme.css — здесь только раскладка и
+ * оформление элементов управления.
+ */
+
+/* --------------------------------------------------------------------------
+ * 1. Заголовок раздела
+ *
+ * Один размер на всех экранах. Раньше «События» был 26 px, «Настройки» —
+ * 42 px: на переходе между разделами заголовок прыгал. Теперь оба 30 px,
+ * и различие только в подписи под ним.
+ * ------------------------------------------------------------------------ */
+.planner .page-title h1,
+.planner .page-title.events-title h1 {
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Кнопка возврата одинаковая в обоих разделах: таблетка в цвет текста,
+ * а не системная кнопка со стрелкой. */
+.planner .page-title .text-button,
+.planner .page-title .back-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 0 16px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.planner .page-title .text-button:active {
+  background: var(--soft);
+}
+
+/* --------------------------------------------------------------------------
+ * 2. Карточка раздела
+ *
+ * Единая плотность: 20 px внутри, скругление 20 px, тонкая граница вместо
+ * тени. Раньше у карточек настроек и у карточек событий были разные радиусы
+ * (28 и 16), и вместе они читались как из разных наборов.
+ * ------------------------------------------------------------------------ */
+.planner .settings-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 20px;
+  margin: 0 0 16px;
+}
+
+/* Заголовок внутри карточки — не h1 раздела: он меньше и без линии. */
+.planner .settings-card h2 {
+  font-size: 20px;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  font-weight: 600;
+  margin: 0 0 12px;
+  padding: 0;
+  border: 0;
+}
+
+.planner .settings-card h3 {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 20px 0 8px;
+}
+
+.planner .settings-card p {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+
+.planner .settings-card p:last-child {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+ * 3. Строка настройки с переключателем
+ *
+ * Одна высота, одна линия-разделитель, подпись слева, тумблер справа.
+ * ------------------------------------------------------------------------ */
+.planner .settings-card .setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+  margin: 0;
+}
+.planner .settings-card .setting-row:last-of-type {
+  border-bottom: 0;
+}
+.planner .settings-card .setting-row strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.planner .settings-card .setting-row small {
+  display: block;
+  margin-top: 4px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* --------------------------------------------------------------------------
+ * 4. Поля ввода, списки и числа — вместо системных элементов Android
+ *
+ * Было: <select> и <input type="number"> не имели ни appearance: none, ни
+ * своих рамок, поэтому Android рисовал их по-своему — серый прямоугольник,
+ * системная стрелка, счётчики у чисел, свои внутренние отступы. На фоне
+ * бумажной палитры это выглядело как чужая вставка.
+ *
+ * Стало: одно поле на все случаи. Список — с собственной стрелкой, число —
+ * без счётчиков (на телефоне ими всё равно не пользуются, а место они
+ * занимают), дата и время — без системного вида.
+ * ------------------------------------------------------------------------ */
+.planner .field,
+.sheet .field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+.planner .field input,
+.planner .field select,
+.planner .field textarea,
+.sheet .field input,
+.sheet .field select,
+.sheet .field textarea {
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  outline: none;
+  box-shadow: none;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+
+.planner .field input:focus,
+.planner .field select:focus,
+.planner .field textarea:focus,
+.sheet .field input:focus,
+.sheet .field select:focus,
+.sheet .field textarea:focus {
+  border-color: var(--blue);
+  background: var(--surface);
+}
+
+/* Список: убираем системную стрелку и рисуем свою — тонкую, в цвет текста.
+ * Значок задан фоном-картинкой (SVG в data-URI), поэтому не нужен лишний
+ * элемент в разметке. */
+.planner .field select,
+.sheet .field select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 44px;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1.5 7 7.5 13 1.5' fill='none' stroke='%23182b32' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 16px center;
+  background-size: 14px 9px;
+  cursor: pointer;
+}
+
+/* В тёмной теме стрелка светлая: иначе её не видно на тёмном фоне. */
+:root[data-theme="dark"] .planner .field select,
+:root[data-theme="dark"] .sheet .field select,
+:root:not([data-theme="light"]) .planner .field select,
+:root:not([data-theme="light"]) .sheet .field select {
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='9' viewBox='0 0 14 9'%3E%3Cpath d='M1 1.5 7 7.5 13 1.5' fill='none' stroke='%23f5f0e6' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Число: убираем счётчики-стрелки. На телефоне они мелкие и мешают
+ * попасть пальцем, а вводятся числа с клавиатуры. */
+.planner .field input[type="number"],
+.sheet .field input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.planner .field input[type="number"]::-webkit-outer-spin-button,
+.planner .field input[type="number"]::-webkit-inner-spin-button,
+.sheet .field input[type="number"]::-webkit-outer-spin-button,
+.sheet .field input[type="number"]::-webkit-inner-spin-button {
+  appearance: none;
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+/* Поле с ошибкой: рамка в цвет предупреждения, без системной подсветки. */
+.planner .field input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+ * 5. Кнопки внутри карточек раздела
+ *
+ * Одна ширина, один отступ между ними. Раньше кнопки шли вплотную и
+ * разной ширины — строки «Проверить разрешения» и «Послушать голос»
+ * выглядели как случайный набор.
+ * ------------------------------------------------------------------------ */
+.planner .settings-card button.full:not(.text-button) {
+  width: 100%;
+  margin: 0 0 10px;
+}
+.planner .settings-card button.full:not(.text-button):last-child {
+  margin-bottom: 0;
+}
+
+/* Второстепенная кнопка внутри карточки — мягкая заливка вместо прозрачной:
+ * так она не сливается с фоном карточки. */
+.planner .settings-card .secondary {
+  background: var(--soft);
+  border-color: transparent;
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Текстовая кнопка (действие, а не подтверждение) — строка списка, а не
+ * коробка. В «Проверке телефона» таких строк пять подряд, и рамки у каждой
+ * превращали карточку в решётку. Здесь они идут как пункты меню с тонкой
+ * линией-разделителем и стрелкой справа. */
+.planner .settings-card .text-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-weight: 600;
+  font-size: 15px;
+  text-align: left;
+}
+.planner .settings-card .text-button:last-of-type {
+  border-bottom: 0;
+  padding-bottom: 4px;
+}
+.planner .settings-card .text-button:active {
+  background: var(--soft);
+}
+/* Стрелка «перейти» справа: показывает, что нажатие уводит в другое окно
+ * или системный экран, а не просто переключает состояние. */
+.planner .settings-card .text-button::after {
+  content: "›";
+  flex-shrink: 0;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted);
+}
+.planner .settings-card .text-button.danger {
+  color: var(--danger);
+}
+.planner .settings-card .text-button.danger::after {
+  color: var(--danger);
+}
+
+/* --------------------------------------------------------------------------
+ * 6. Мелкие подписи и технические строки
+ *
+ * .hint — пояснение под настройкой. В разделе настроек их много, и раньше
+ * они шли сплошным потоком без воздуха.
+ * ------------------------------------------------------------------------ */
+.planner .settings-card .hint {
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+.planner .settings-card .hint:last-child {
+  margin-bottom: 0;
+}
+
+/* --------------------------------------------------------------------------
+ * 7. Кнопка прослушивания сигнала
+ *
+ * Стоит под списком, поэтому не растягивается на всю ширину и отделена
+ * отступом сверху.
+ * ------------------------------------------------------------------------ */
+.planner .field .cue-preview {
+  align-self: flex-start;
+  margin-top: 2px;
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 14px;
+}
+
+/* --------------------------------------------------------------------------
+ * 8. Системные элементы, которых быть не должно
+ *
+ * Полоса прокрутки на телефоне не нужна: прокрутка идёт пальцем, а
+ * системная полоса поверх карточек выглядит как артефакт.
+ * ------------------------------------------------------------------------ */
+.planner ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+/* Подсветка нажатия и контекстное меню по долгому тапу: это поведение
+ * браузера, а не приложения. */
+.planner input,
+.planner select,
+.planner textarea,
+.planner .setting-row {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Автозаполнение Chrome красит поле своим жёлтым — на бумажной палитре это
+ * выглядит как ошибка. Перекрываем внутренней тенью в цвет фона. */
+.planner .field input:-webkit-autofill,
+.planner .field input:-webkit-autofill:focus,
+.sheet .field input:-webkit-autofill {
+  -webkit-box-shadow: 0 0 0 1000px var(--bg) inset;
+  -webkit-text-fill-color: var(--text);
+  caret-color: var(--text);
+}
+
+/* --------------------------------------------------------------------------
+ * 9. Раздел «События»
+ *
+ * Приводим к той же сетке, что и настройки: те же поля, тот же радиус,
+ * та же плотность. Раньше карточка события была 16 px по радиусу и с
+ * боковой цветной полосой в 6 px, а строка дня — отдельной плашкой.
+ * ------------------------------------------------------------------------ */
+.planner .agenda .day-filter {
+  display: block;
+  margin: 0 0 16px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+
+/* Подпись дня — тот же вес, что заголовок карточки настроек, но мельче:
+ * это ориентир, а не заголовок раздела. */
+.planner .agenda .day-filter strong {
+  display: block;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0.01em;
+}
+
+/* Карточка события: тот же радиус и та же граница, что у карточки
+ * настроек. Цветная полоса слева остаётся — это единственный цветовой
+ * акцент, по которому событие узнаётся. */
+.planner .agenda .agenda-card {
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  overflow: hidden;
+}
+
+/* Строка «Удалить всё»: та же геометрия, что у карточки, но с красной
+ * каймой. Отдельной плашки с другим радиусом больше нет. */
+.planner .agenda .delete-day-row {
+  border-radius: 20px;
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--danger);
+  background: var(--surface);
+  margin: 0 0 16px;
+  padding: 12px 16px;
+}
+
+/* Пустой раздел: тот же воздух, что у пустых состояний настроек. */
+.planner .agenda .empty-agenda {
+  padding: 48px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 20px;
+  color: var(--muted);
+}
+.planner .agenda .empty-agenda h2 {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  color: var(--text);
+}
+
+/* --------------------------------------------------------------------------
+ * 10. Окна (модальные) — тот же язык, что у разделов
+ *
+ * Поля и кнопки внутри окон раньше шли с системным видом: <select> без
+ * своей стрелки, <input type="email"> с автозаполнением Chrome. Здесь они
+ * приведены к тем же правилам, что и в разделах.
+ * ------------------------------------------------------------------------ */
+.sheet .field + .field {
+  margin-top: 0;
+}
+
+.sheet .secondary.full,
+.sheet .primary.full {
+  margin: 0 0 10px;
+}
+.sheet .secondary.full:last-child,
+.sheet .primary.full:last-child {
+  margin-bottom: 0;
+}
+
+/* Текстовая кнопка в окне — строка действия, как в настройках. Отступ
+ * задаём здесь же: правило .full выше добавило бы нижнее поле. */
+.sheet .text-button.full {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 48px;
+  margin: 0;
+  padding: 12px 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  font-weight: 600;
+  font-size: 15px;
+  text-align: left;
+}
+.sheet .text-button.full::after {
+  content: "›";
+  flex-shrink: 0;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--muted);
+}
