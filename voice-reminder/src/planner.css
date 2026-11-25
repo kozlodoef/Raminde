@@ -550,11 +550,10 @@
   z-index: 21;
 }
 @media (min-width: 800px) {
-  /* На широком экране клавиатура не мешает, но высоту всё равно берём от
-     видимой области: она учитывает и масштаб, и панели браузера. */
-  .home-screen .planner-content {
-    height: calc(var(--app-height, 100dvh) - 190px);
-  }
+  /* Высота .planner-content на главной одна и та же на любом экране —
+     во focus-home.css (100% от родителя). Здесь её больше не переопределяем:
+     разные вычитаемые на разных ширинах и давали пустую полосу под
+     календарём. */
   .home-screen .planner-actions {
     max-width: 560px;
   }
@@ -683,30 +682,15 @@
 }
 
 /* Intrinsic calendar; remaining vertical space belongs to the reminder field. */
-.home-screen .planner-content {
-  /*
-   * Высота — от видимой области, а не от окна.
-   *
-   * Здесь стояло height: calc(100dvh - 108px). При открытой клавиатуре окно
-   * не меняется (dvh остаётся прежним), поэтому блок сохранял полную высоту,
-   * а его нижняя часть — календарь — уходила под клавиатуру, и прокрутить
-   * было нечего. Теперь высота считается от --app-height, которую ведёт
-   * viewport-height.js по visualViewport: когда клавиатура открывается,
-   * реальная высота уменьшается, содержимое перестаёт помещаться и
-   * появляется прокрутка.
-   *
-   * height: auto здесь не подходит: без ограничения высоты блок вырастает по
-   * содержимому, прокручивать внутри нечего, и низ календаря уходит за экран.
-   */
-  height: calc(var(--app-height, 100dvh) - 108px - env(safe-area-inset-bottom));
-  min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-  padding-bottom: 0;
-  scrollbar-width: thin;
-}
+/*
+ * Высота этого блока задаётся в focus-home.css: она равна высоте родителя,
+ * чтобы поле ввода занимало всё свободное место, а календарь стоял внизу.
+ *
+ * Здесь раньше стояло height: calc(100dvh - 108px) — на 108 px меньше
+ * родителя. Из-за этого поле сжималось, а под календарём оставалась полоса
+ * пустого места. Дубль правила убран: два селектора с разными вычитаемыми
+ * перекрывали друг друга.
+ */
 .home-screen .home-layout {
   min-height: 0;
   grid-template-rows: minmax(min-content, 1fr) auto;
@@ -805,10 +789,7 @@
   padding: 0 20px;
 }
 @media (min-width: 800px) {
-  .home-screen .planner-content {
-    /* От видимой области, как и на телефоне: единая схема высоты. */
-    height: calc(var(--app-height, 100dvh) - 128px);
-  }
+  /* Высота — из focus-home.css (100% от родителя), см. комментарий выше. */
   .home-screen .home-layout {
     grid-template-rows: minmax(0, 1fr);
     align-items: start;
