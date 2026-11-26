@@ -119,13 +119,13 @@ test("прозвучавшее напоминание не освобождае�
 test("прозвучавшее напоминание считается вместе с запланированным", () => {
   const fired = { [day]: ["a@1", "b@2"] };
   assert.doesNotThrow(() => free([], rule("third"), fired));
-  assert.throws(() => free([], rule("third", 2), fired), /напоминаний/);
+  assert.throws(() => free([], rule("third", 2), fired), /предел подписки/);
 });
 test("одно и то же напоминание не считается дважды", () => {
   // Напоминание и запланировано, и уже прозвучало — это одно место, не два.
   const fired = { [day]: ["a@1"] };
   assert.doesNotThrow(() => free([], rule("a"), fired));
-  assert.throws(() => free([], rule("b", 3), fired), /напоминаний/);
+  assert.throws(() => free([], rule("b", 3), fired), /предел подписки/);
 });
 test("прозвучавшее в другой день не закрывает этот", () => {
   const fired = { "2026-11-09": ["a@1", "b@2", "c@3"] };

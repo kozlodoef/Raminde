@@ -39,6 +39,20 @@ function monthOf(t) {
   return localDate(new Date(t)).slice(0, 7);
 }
 /**
+ * Согласование слова «напоминание» с числом.
+ *
+ * Без этого в сообщении о пределе выходило «4 напоминаний» — мелочь, но она
+ * читается как небрежность и подрывает доверие к самому ограничению.
+ */
+function remindersWord(n) {
+  const form = new Intl.PluralRules("ru").select(n);
+  return form === "one"
+    ? "напоминание"
+    : form === "few"
+      ? "напоминания"
+      : "напоминаний";
+}
+/**
  * Занятые места на каждом дне месяца.
  *
  * Место занимает и запланированное напоминание, и уже прозвучавшее. Второе
@@ -83,8 +97,8 @@ export function assertDailyCapacity(
   const limitMessage = (date, count) => {
     const when = date.split("-").reverse().join(".");
     if (limit < MAX_DAILY_EVENTS)
-      return `На ${when} уже ${count} напоминаний в день. Это предел подписки — оформите её, чтобы снять ограничение.`;
-    return `На ${when} получится ${count} напоминаний. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`;
+      return `На ${when} уже ${count} ${remindersWord(count)} в день. Это предел подписки — оформите её, чтобы снять ограничение.`;
+    return `На ${when} получится ${count} ${remindersWord(count)}. Максимум — ${MAX_DAILY_EVENTS} в день. Выберите другую дату или уберите лишнее время.`;
   };
   // Отдельное сообщение для случая, когда день закрыт прозвучавшими
   // напоминаниями. Человек их уже удалил и ждёт, что день освободился —
@@ -92,8 +106,8 @@ export function assertDailyCapacity(
   const spokenMessage = (date, count) => {
     const when = date.split("-").reverse().join(".");
     if (limit < MAX_DAILY_EVENTS)
-      return `На ${when} уже прозвучало ${count} напоминания — это предел подписки. Удаление их день не освобождает: оформите её, чтобы ставить больше.`;
-    return `На ${when} уже прозвучало ${count} напоминаний. Максимум — ${MAX_DAILY_EVENTS} в день.`;
+      return `На ${when} уже прозвучало ${count} ${remindersWord(count)} — это предел подписки. Удаление их день не освобождает: оформите её, чтобы ставить больше.`;
+    return `На ${when} уже прозвучало ${count} ${remindersWord(count)}. Максимум — ${MAX_DAILY_EVENTS} в день.`;
   };
   const months = new Set();
   let recurring = false;
