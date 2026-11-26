@@ -413,6 +413,20 @@ h1 span {
   width: 100%;
   margin: 8px 0;
 }
+/* Переспрос о двусмысленном времени: «15:30 (днём)» и «03:30 (ночью)» —
+   два равноправных варианта. Выбранный обведён, но не залит: заливка
+   основного цвета означала бы «так и будет», а решение ещё не принято. */
+.doubt-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 8px;
+}
+.doubt-choices .secondary.is-chosen {
+  outline: 2px solid var(--blue);
+  outline-offset: -2px;
+  font-weight: 600;
+}
 .setting-row {
   padding: 16px 0;
   border-bottom: 1px solid var(--line);

@@ -10,6 +10,9 @@ import {
   parseClockPrefix,
   minutesAfterHour,
   looksLikeTime,
+  WEEKDAYS_SRC,
+  WEEKDAY_CLAUSE_SRC,
+  END_OF_WEEK_SRC,
 } from "../domain/time-lexicon.js";
 // Даты словами («двадцать пятого декабря») — тоже из общего модуля, чтобы
 // голос, сохранение и поле ввода понимали их одинаково.
@@ -112,6 +115,16 @@ const PARTS_OF_DAY = {
 
 const DEFAULT_HOUR = { morning: 9, afternoon: 15, evening: 19, night: 23 };
 
+/**
+ * «В конце недели» — пятница 18:00.
+ *
+ * Оборот частый, а времени в нём не названо. Значение вынесено в константу:
+ * это договорённость о поведении, а не факт языка, и её могут поменять.
+ * Экспортируется, чтобы тест проверял именно то значение, по которому
+ * работает разбор, а не повторял числа у себя.
+ */
+export const END_OF_WEEK_DEFAULT = { weekday: 5, hour: 18, minute: 0 };
+
 const TENS = { двадцать: 20, тридцать: 30, сорок: 40, пятьдесят: 50 };
 
 // Минуты, идущие СЛОВОМ сразу после часа: «в шесть тридцать», «16:00
@@ -148,6 +161,28 @@ const w = (word) => WB_L + word + WB_R; // обёртка для точного 
 // Внимание: \w в JavaScript НЕ включает кириллицу, поэтому для русских окончаний
 // используем явный класс. Без него шаблоны вида "час\w*" не матчат "часа".
 const RU = "[а-яё]*";
+
+/**
+ * Номер дня недели из любой его формы.
+ *
+ * Формы приходят из лексикона (WEEKDAYS_SRC), но падежей там больше, чем в
+ * таблице WEEKDAYS: «пятнице», «средам», «воскресеньями» появились вместе с
+ * указателями («в эту пятницу»). Поэтому определяем день по началу слова, а
+ * не по точному совпадению: разбор и вырезание должны знать одни и те же
+ * формы, иначе слово вернётся в текст напоминания.
+ */
+function weekdayNumber(word) {
+  const k = String(word || "").toLowerCase().replace(/ё/g, "е");
+  if (WEEKDAYS[k] !== undefined) return WEEKDAYS[k];
+  if (/^понедельник/u.test(k)) return 1;
+  if (/^вторник/u.test(k)) return 2;
+  if (/^сред/u.test(k)) return 3;
+  if (/^четверг/u.test(k)) return 4;
+  if (/^пятниц/u.test(k)) return 5;
+  if (/^суббот/u.test(k)) return 6;
+  if (/^воскресень/u.test(k)) return 0;
+  return null;
+}
 
 function wordToNum(ww) {
   if (/^\d+$/.test(ww)) return parseInt(ww, 10);
@@ -243,6 +278,14 @@ export function parseReminder(phrase, baseArg) {
   let pod = null; // часть суток
   let timeFound = false,
     dateFound = false;
+  // Час подставлен по умолчанию («в конце недели»), а не назван человеком.
+  let defaultTime = false;
+  // Оборот «в конце недели»: дата задана (пятница), время — по умолчанию.
+  let endOfWeek = false;
+  // Варианты чтения двусмысленного часа, дневное первым: [«13:00», «01:00»].
+  let hourChoices = [];
+  // Час назван без части суток, и он из тех, что бывают и днём, и ночью.
+  let ambiguousHour = false;
   let relResult = null; // результат для "через N ..."
 
   // ---------- A. "через N минут/часов/дней/недель" ----------
@@ -345,17 +388,56 @@ export function parseReminder(phrase, baseArg) {
       dateFound = true;
     }
 
-    // день недели: "в пятницу", "в следующий вторник"
+    // «в конце недели» — раньше не понималось вовсе: слова оставались в
+    // тексте, а напоминание вставало на сегодня. Разбираем раньше дня недели:
+    // в этом обороте нет названия дня, но время задано по умолчанию.
     if (dayOffset === null) {
       const m = eat(
-        mkRe("(?:в\\s+)?(?:следующ\\w*\\s+)?(" + join(WEEKDAYS) + ")" + WB_R),
+        mkRe("(?<!\\p{Ll})(?:" + END_OF_WEEK_SRC + ")" + WB_R),
       );
       if (m) {
-        const target = WEEKDAYS[m[1]];
-        let diff = (target - base.getDay() + 7) % 7;
+        let diff =
+          (END_OF_WEEK_DEFAULT.weekday - base.getDay() + 7) % 7;
+        // «В конце недели» — это ещё не прошедшая пятница: если она уже
+        // была (или это сегодня), берём следующую.
         if (diff === 0) diff = 7;
         dayOffset = diff;
         dateFound = true;
+        // Дату запомнили, время пока не подставляем: человек мог назвать его
+        // отдельно («в конце недели в 10 утра»), и тогда главным будет оно.
+        // Значение по умолчанию подставляется ниже, после поиска времени.
+        endOfWeek = true;
+      }
+    }
+
+    // день недели: «в пятницу», «в эту пятницу», «в следующий вторник»
+    //
+    // Указатель («эту», «следующий») входит в совпадение: раньше шаблон знал
+    // только «следующ*», а слово «эту» оставалось в тексте напоминания —
+    // получалось «Позвонить маме эту». Падежи и указатели живут в лексиконе,
+    // чтобы разбор, вырезание и подсказка понимали их одинаково.
+    if (dayOffset === null) {
+      const m = eat(
+        mkRe(
+          "(?<!\\p{Ll})(?:" +
+            WEEKDAY_CLAUSE_SRC +
+            ")" +
+            WB_R,
+        ),
+      );
+      if (m) {
+        // Название дня — последнее слово совпадения: перед ним могут стоять
+        // предлог и указатель.
+        const word = m[0].match(
+          mkRe("(" + WEEKDAYS_SRC + ")$"),
+        );
+        if (word) {
+          const target = weekdayNumber(word[1]);
+          let diff = (target - base.getDay() + 7) % 7;
+          if (diff === 0) diff = 7;
+          dayOffset = diff;
+          dateFound = true;
+        }
       }
     }
 
@@ -428,6 +510,13 @@ export function parseReminder(phrase, baseArg) {
         hour = c.hour;
         minute = c.minute;
         timeFound = true;
+        defaultTime = false;
+        // Двусмысленность «день или ночь» разрешает лексикон — одно правило
+        // на все три пути разбора. Здесь только переносим признак наверх,
+        // чтобы приложение показало переспрос. «Без четверти шесть» и прочие
+        // обороты со счётом от названного часа помечены не будут.
+        ambiguousHour = Boolean(c.ambiguous);
+        hourChoices = c.choices || [];
         // Шаблон мог захватить лишнее слово справа («в 8 два хлеба»):
         // вырезаем только ту часть, которая действительно время.
         hourTokenEnd = start + c.length;
@@ -468,6 +557,44 @@ export function parseReminder(phrase, baseArg) {
           index: hourTokenEnd,
         });
       }
+    }
+
+    // ---------- «в час» ----------
+    // Слово «час» без числа — это первый час. Раньше такая запись не
+    // распознавалась вовсе: «в час позвонить» уходило в текст напоминания, а
+    // время оставалось пустым. Разбираем до общего поиска времени: шаблон
+    // лексикона требует числа перед «час» и без него не совпадает.
+    //
+    // Часть суток сюда намеренно не входит — она ищется отдельно (podSpan) и
+    // сама поправит час: «в час дня» → 13:00, «в час ночи» → 01:00.
+    if (hour === null) {
+      const m = s.match(
+        mkRe(
+          "(?<![\\p{L}\\d])((?:в|во|к|около)\\s+)(час)(?:у|а)?" +
+            "(?![\\p{L}\\d])",
+        ),
+      );
+      if (m) {
+        hour = 1;
+        minute = 0;
+        timeFound = true;
+        hourTokenEnd = m.index + m[0].length;
+        consumed.push({ match: m[0], index: m.index });
+        // «В час» без части суток — 01:00 или 13:00; днём это чаще.
+        ambiguousHour = !podSpan;
+      }
+    }
+
+    // ---------- «в конце недели»: время по умолчанию ----------
+    // Дату этого оборота мы уже запомнили (пятница). Если отдельного времени
+    // человек не назвал, подставляем договорённость — 18:00. Проверяем здесь,
+    // после поиска времени: названное время должно побеждать, иначе
+    // «в конце недели в 10 утра» превращалось бы в 18:00.
+    if (endOfWeek && hour === null) {
+      hour = END_OF_WEEK_DEFAULT.hour;
+      minute = END_OF_WEEK_DEFAULT.minute;
+      timeFound = true;
+      defaultTime = true;
     }
 
     // ---------- D. Дата (после времени) ----------
@@ -582,6 +709,8 @@ export function parseReminder(phrase, baseArg) {
     when = relResult;
     timeFound = true;
     dateFound = true;
+    // Отсчёт «через два часа» однозначен: там час не называется, а считается.
+    ambiguousHour = false;
   } else {
     when = new Date(base);
     if (absDate) when = new Date(absDate.y, absDate.m, absDate.d, 0, 0, 0);
@@ -603,6 +732,9 @@ export function parseReminder(phrase, baseArg) {
         if (h >= 8 && h <= 11) h += 12;
         if (h === 12) h = 0;
       }
+      // Двусмысленность «день или ночь» уже разрешена в лексиконе: оттуда
+      // приходит дневное чтение и признак ambiguous. Поправлять час здесь
+      // второй раз нельзя — иначе 13:00 стало бы 01:00.
       h = ((h % 24) + 24) % 24;
       when.setHours(h, minute, 0, 0);
     } else if (pod) {
@@ -617,6 +749,7 @@ export function parseReminder(phrase, baseArg) {
         timeFound: false,
         dateFound: false,
         approx: true,
+        ambiguous: false,
       };
     }
 
@@ -629,7 +762,26 @@ export function parseReminder(phrase, baseArg) {
   }
 
   const text = cap(cleanup(stripConsumed(original, consumed))) || "Напоминание";
-  return { when, text, timeFound, dateFound, approx: !timeFound };
+  return {
+    when,
+    text,
+    timeFound,
+    dateFound,
+    approx: !timeFound || defaultTime,
+    // Время подставлено по умолчанию, а не названо человеком: так бывает в
+    // обороте «в конце недели», где договорённость — пятница 18:00.
+    timeIsDefault: defaultTime,
+    // Час назван так, что его можно понять двояко («в час», «в 3»): днём или
+    // ночью. Приложение показывает такой разбор с переспросом. Не ошибка —
+    // поэтому issues не трогаем, и напоминание сохраняется как обычно.
+    ambiguous: ambiguousHour && timeFound,
+    // Оба чтения часа, дневное первым: «в час» → [«13:00», «01:00»]. Пустой
+    // список, когда переспрашивать не о чем.
+    choices: ambiguousHour && timeFound ? hourChoices : [],
+    // Вырезанный из фразы кусок времени и даты в исходной строке: по нему
+    // другие слои понимают, что уже убрано из текста напоминания.
+    consumed: consumed.map((x) => ({ index: x.index, length: x.match.length })),
+  };
 }
 
 function stripConsumed(s, consumed) {

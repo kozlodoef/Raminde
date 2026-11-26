@@ -59,6 +59,40 @@ public class VoskRecognitionPlugin extends Plugin {
     private static final String MODEL_ASSET = "sherpa/zipformer-ru";
     private static final int SAMPLE_RATE = 16000;
 
+    /**
+     * Список hotwords — подсказка распознавателю о словах предметной области.
+     *
+     * Зачем. sherpa-onnx умеет contextual biasing: слова из файла получают
+     * смещение при выборе гипотез. В напоминаниях много оборотов, которых в
+     * обычной речи почти нет, — «послезавтра», «полчетвёртого», названия
+     * месяцев. Без подсказки модель слышит их как похожие обычные слова.
+     *
+     * Файл собирается скриптом scripts/build-hotwords.mjs из тех же таблиц,
+     * по которым работает разбор: список не расходится с лексиконом. Обновлять
+     * его нужно только при добавлении новых форм времени.
+     *
+     * Замер на 30 фразах с датами и временем (синтез ru-RU, шум 10 дБ,
+     * see tools/measure-hotwords.py):
+     *   без hotwords (greedy):        4.76% WER
+     *   с hotwords, score 1.5:        5.82% WER
+     *   с hotwords, score 3.0:        5.82% WER
+     * То есть подсказка НЕ улучшила распознавание на этом наборе, а на одной
+     * фразе («в половине одиннадцатого») ухудшила: «напомни» превратилось в
+     * «напомнив». Причина в модели: zipformer-ru собран из модели Vosk, у неё
+     * нет BPE-словаря, и sherpa-onnx строит контекстный граф по символам —
+     * смещение получается слабым и «размазанным» на весь список. Слишком
+     * длинный список (145 записей) при этом заметно вредит: на нём ошибок
+     * больше, чем на коротком из 11 слов, где отличается ровно ноль фраз.
+     *
+     * Поэтому hotwords ОТКЛЮЧЕНЫ по умолчанию: включать есть смысл только
+     * вместе с более точной настройкой и после замера на реальном телефоне.
+     * Число из замера выше — не повод держать подсказку включённой.
+     */
+    private static final boolean USE_HOTWORDS = false;
+    private static final String HOTWORDS_ASSET = "sherpa/hotwords.txt";
+    /** Вес подсказки. Значение из замера: при 15 и выше вывод рассыпается. */
+    private static final float HOTWORDS_SCORE = 1.5f;
+
     // --- Параметры нарезки на фрагменты ---
     /** Тишина, после которой фрагмент считается законченным. */
     private static final long SILENCE_MS = 550;
@@ -224,7 +258,19 @@ public class VoskRecognitionPlugin extends Plugin {
                 OfflineRecognizerConfig config = new OfflineRecognizerConfig();
                 config.setFeatConfig(feat);
                 config.setModelConfig(model);
-                config.setDecodingMethod("greedy_search");
+                // Подсказка о словах предметной области работает только на
+                // поиске по лучам: на жадном поиске sherpa-onnx игнорирует
+                // hotwords (в логе — «greedy-search decoders never construct
+                // it»). Поэтому при включённой подсказке меняем и метод.
+                boolean hotwords = USE_HOTWORDS && hotwordsAssetPresent();
+                config.setDecodingMethod(
+                    hotwords ? "modified_beam_search" : "greedy_search");
+                if (hotwords) {
+                    config.setHotwordsFile(HOTWORDS_ASSET);
+                    config.setHotwordsScore(HOTWORDS_SCORE);
+                    Log.i(TAG, "hotwords enabled: " + HOTWORDS_ASSET
+                        + " score=" + HOTWORDS_SCORE);
+                }
 
                 recognizer = new OfflineRecognizer(getContext().getAssets(), config);
                 Log.i(TAG, "sherpa-onnx model loaded from assets");
@@ -233,6 +279,7 @@ public class VoskRecognitionPlugin extends Plugin {
                 result.put("ready", true);
                 result.put("sampleRate", SAMPLE_RATE);
                 result.put("engine", "sherpa-onnx zipformer-ru");
+                result.put("hotwords", hotwords);
                 call.resolve(result);
             } catch (Exception e) {
                 Log.e(TAG, "model load failed", e);
@@ -246,9 +293,26 @@ public class VoskRecognitionPlugin extends Plugin {
         loadThread.start();
     }
 
-    /** Проверяет, что нужные файлы модели вообще есть в assets. */
-    private boolean modelAssetsPresent() {
+    /**
+     * Есть ли в сборке список hotwords.
+     *
+     * Файл собирается отдельным шагом (scripts/build-hotwords.mjs) и может
+     * отсутствовать в чужой сборке. Без проверки sherpa-onnx упал бы на
+     * инициализации с «Open hotwords file failed», и распознавание пропало бы
+     * целиком. Поэтому подсказка включается, только если файл на месте.
+     */
+    private boolean hotwordsAssetPresent() {
         try {
+            getContext().getAssets().open(HOTWORDS_ASSET).close();
+            return true;
+        } catch (Exception e) {
+            Log.w(TAG, "hotwords asset missing: " + HOTWORDS_ASSET);
+            return false;
+        }
+    }
+
+    /** Проверяет, что нужные файлы модели вообще есть в assets. */
+    private boolean modelAssetsPresent() {        try {
             String[] files = getContext().getAssets().list(MODEL_ASSET);
             if (files == null) return false;
             int found = 0;

@@ -10,19 +10,19 @@ import {
   hasPastOccurrence,
   PAST_TIME_MESSAGE,
 } from "./calendar.js";
-import { parseIntent } from "./intent.js";
+import { parseIntent, scoreConfidence, CONFIDENCE_THRESHOLD } from "./intent.js";
 import {
   parseClockText,
   minutesAfterHour,
   formatClock,
-  daypartIn,
-  applyDaypart,
   daypartClock,
   DAYPARTS as LEX_DAYPARTS,
   CLOCK_SRC,
   BEZ_SRC,
   NUM_SRC,
   DAYPART_SRC,
+  WEEKDAY_CLAUSE_SRC,
+  END_OF_WEEK_SRC,
 } from "./time-lexicon.js";
 export const COLORS = [
   "#146ad4",
@@ -149,10 +149,12 @@ export function dropDateWords(phrase) {
     "январ(?:ь|я|ю|ем|е)|феврал(?:ь|я|ю|ем|е)|март(?:а|у|ом|е)?|апрел(?:ь|я|ю|ем|е)|" +
     "ма[йя]|мае|маю|маем|июн(?:ь|я|ю|ем|е)|июл(?:ь|я|ю|ем|е)|август(?:а|у|ом|е)?|" +
     "сентябр(?:ь|я|ю|ем|е)|октябр(?:ь|я|ю|ем|е)|ноябр(?:ь|я|ю|ем|е)|декабр(?:ь|я|ю|ем|е)";
-  const weekdays =
-    "понедельник(?:а|у|ом|е)?|вторник(?:а|у|ом|е)?|сред(?:а|у|ой|ою|е|ам|ах|ами)|" +
-    "четверг(?:а|у|ом|е)?|пятниц(?:а|у|ей|ею|е|ам|ах|ами)|" +
-    "суббот(?:а|у|ой|ою|е|ам|ах|ами)|воскресень(?:е|я|ю|ем|и|ям|ях|ями)";
+  // Дни недели, указатели при них и оборот «в конце недели» берём из
+  // лексикона: там они в одном месте для разбора, вырезания и подсказки.
+  // Раньше список был свой, без «эту»/«следующий», из-за чего указатель
+  // оставался в тексте напоминания: «Позвонить маме эту».
+  const weekdays = WEEKDAY_CLAUSE_SRC;
+  const endOfWeek = END_OF_WEEK_SRC;
   // Порядковое число дня («двадцать пятого», «первого»). Нужен ограниченный
   // набор основ: без него «[а-яё]+\s+» перед месяцем съедало любое слово.
   const dayOrdinal =
@@ -205,12 +207,20 @@ export function dropDateWords(phrase) {
       " ",
     )
     .replace(
-      // «в пятницу», «следующий вторник», «по средам»
+      // «в пятницу», «в эту пятницу», «следующий вторник», «по средам»,
+      // «в конце недели». Обороты целиком приходят из лексикона, поэтому
+      // вырезается ровно то, что разобрал парсер.
       new RegExp(
-        // Перечень дней недели обязательно в группе: без неё альтернатива
-        // «|» разрывает весь шаблон, и ветки после первой теряют и границу
-        // слова, и предлог — «в пятницу» превращалось в «в позвонить маме».
-        LB + "(?:(?:в|во|по|на)\\s+)?(?:следующ[а-яё]*\\s+)?(?:" + weekdays + ")" + RB,
+        LB +
+          "(?:" +
+          endOfWeek +
+          "|" +
+          // Перечень дней недели обязательно в группе: без неё альтернатива
+          // «|» разрывает весь шаблон, и ветки после первой теряют и границу
+          // слова, и предлог — «в пятницу» превращалось в «в позвонить маме».
+          weekdays +
+          ")" +
+          RB,
         "giu",
       ),
       " ",
@@ -266,22 +276,48 @@ export function spokenDateKind(phrase) {
 /**
  * Разбирает вырезанную из фразы «порцию» времени в «ЧЧ:ММ».
  *
- * Вся работа — в лексиконе (parseClockText): он знает цифры, точку, пробел,
- * слова, «часов»/«минут», дроби и «без N …». Здесь только часть суток —
- * она меняет час, поэтому применяется после разбора.
+ * Работа идёт целиком в лексиконе (parseClockText): он знает цифры, точку,
+ * пробел, слова, «часов»/«минут», дроби, «без N ...» и сам применяет часть
+ * суток. Второй поправки здесь быть не должно: раньше она считалась и в
+ * лексиконе, и тут.
  */
 function parseTime(value, neighbours = "") {
+  const info = parseTimeInfo(value, neighbours);
+  return info ? info.time : null;
+}
+/**
+ * То же, что parseTime, но с признаком двусмысленности часа.
+ *
+ * Нужен потому, что дальше фраза переписывается цифрами: «в час позвонить»
+ * становится «в 13:00 позвонить», и двусмысленность («13:00 или 01:00?»)
+ * по переписанной строке уже не видна. Признак надо снять с ИСХОДНОГО текста
+ * и провести наверх — иначе переспрос не показывается.
+ *
+ * Заодно это снимает обратную ошибку: «в час ночи» (01:00) после перезаписи
+ * выглядит как «в 01:00», то есть как раз как двусмысленный час 1. Здесь
+ * часть суток названа, и признак не ставится.
+ *
+ * @returns {{time:string, ambiguous:boolean, choices:string[]}|null}
+ */
+function parseTimeInfo(value, neighbours = "") {
   const text = String(value || "").toLowerCase().replaceAll("ё", "е").trim();
   // «обед», «полдень», «полночь» — сразу известное время. «Обед» берём
   // только когда рядом нет другой части суток: «днём обед» — это еда.
   const direct = daypartClock(text, neighbours);
-  if (direct) return direct;
+  if (direct) return { time: direct, ambiguous: false, choices: [] };
   if (DAYPARTS[text]) return null;
+  // parseClockText уже применяет часть суток и разрешает двусмысленность
+  // «день или ночь» — здесь ничего добавлять не нужно. Второе применение
+  // поправки сдвинуло бы час ещё раз.
   const c = parseClockText(text, neighbours);
   if (!c) return null;
-  const part = daypartIn(text);
-  const hour = part ? applyDaypart(c.hour, part) : c.hour;
-  return formatClock(hour, c.minute);
+  const time = formatClock(c.hour, c.minute);
+  if (!time) return null;
+  return {
+    time,
+    ambiguous: Boolean(c.ambiguous),
+    choices: c.choices || [],
+  };
 }
 /**
  * Разбирает сказанную фразу в напоминание.
@@ -305,11 +341,23 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
       "в $2",
     ),
     times = [],
-    ranges = [];
+    ranges = [],
+    // Двусмысленный час и его варианты — снятые с ИСХОДНОЙ фразы. Дальше
+    // строка переписывается цифрами, и по ней признак уже не восстановить:
+    // «в час» становится «в 13:00», а «в час ночи» — «в 01:00», то есть
+    // выглядит как раз как двусмысленная запись, хотя часть суток названа.
+    hourDoubts = [];
   for (const m of normalized.matchAll(timeClause)) {
     const parts = m[1].split(/\s*,\s*(?:в\s+)?|\s+и\s+(?:в\s+)?/u);
-    const parsed = parts.map((p) => parseTime(p, normalized));
-    if (parsed.every(Boolean)) {
+    const infos = parts.map((p) => parseTimeInfo(p, normalized));    if (infos.every(Boolean)) {
+      for (const info of infos)
+        if (info.ambiguous)
+          hourDoubts.push({
+            kind: "hour",
+            choices: info.choices,
+            chosen: info.time,
+          });
+      const parsed = infos.map((i) => i.time);
       // «в 16:00 тридцать»: минуты словом добираем к последнему времени
       // и расширяем диапазон, чтобы слово не осталось в тексте.
       let length = m[0].length;
@@ -333,8 +381,15 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
     if (countingBefore.test(normalized.slice(0, m.index))) continue;
     const before = normalized.slice(0, m.index);
     if (/(?<!\p{L})в\s*$/iu.test(before)) continue;
-    let time = parseTime(m[1], normalized);
-    if (!time) continue;
+    const info = parseTimeInfo(m[1], normalized);
+    if (!info) continue;
+    if (info.ambiguous)
+      hourDoubts.push({
+        kind: "hour",
+        choices: info.choices,
+        chosen: info.time,
+      });
+    let time = info.time;
     // «восемнадцать часов тридцать» — то же правило, что и в «в …».
     let length = m[0].length;
     const bm = bareMinutesAfter(
@@ -371,6 +426,25 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
   const parsed = parseIntent(dateSpeech ? normalized : dropDateWords(normalized), now, {
     dates: dateSpeech,
   });
+  // Признак двусмысленного часа снят с исходной фразы, поэтому добавляем
+  // его к сомнениям, найденным по переписанной строке. Повторы убираем:
+  // одно и то же время могло встретиться в двух проходах поиска.
+  if (hourDoubts.length) {
+    const seen = new Set(parsed.doubts.map((d) => JSON.stringify(d)));
+    for (const d of hourDoubts) {
+      const key = JSON.stringify(d);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      parsed.doubts.push(d);
+    }
+    // Уверенность пересчитывается: сомнение по часу опускает её ниже
+    // порога, и приложение показывает переспрос.
+    parsed.confidence = scoreConfidence({
+      issues: parsed.issues,
+      doubts: parsed.doubts,
+    });
+    parsed.needsConfirmation = parsed.confidence < CONFIDENCE_THRESHOLD;
+  }
   if (ambiguous)
     parsed.issues.push(
       "Разные события или расписания задайте по очереди кнопкой «Добавить»",
@@ -401,7 +475,7 @@ export function parseGroup(phrase, selectedDates = [], now = new Date(), options
   }
   const dateSpoken =
     dateSpeech &&
-    /сегодня|завтра|послезавтра|понедель|вторник|сред[ау]|четверг|пятниц|суббот|воскрес|январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр|\d{1,2}[./]\d{1,2}/iu.test(
+    /сегодня|завтра|послезавтра|конц[а-яё]*\s+недел|понедель|вторник|сред[ау]|четверг|пятниц|суббот|воскрес|январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр|\d{1,2}[./]\d{1,2}/iu.test(
       normalized,
     );
   const spokenDate =

@@ -4,6 +4,7 @@
 // с React. Благодаря этому их можно покрыть тестами без рендера интерфейса.
 import { COLORS } from "./groups.js";
 import { pad } from "./calendar.js";
+import { editorPhrase } from "./home-editor.js";
 
 export const uid = () => crypto.randomUUID();
 
@@ -21,6 +22,10 @@ export const blank = (index = 0) => ({
   times: [],
   color: COLORS[index % COLORS.length],
   issues: [],
+  // Сомнения разбора: неоднозначный час («в час»), несколько дат во фразе.
+  // По ним показывается переспрос перед сохранением — не ошибка, поэтому
+  // отдельно от issues.
+  doubts: [],
   // Слово даты, которое человек произнёс: «сегодня», «завтра»,
   // «послезавтра» или ничего. В бесплатной версии дату из него не берём,
   // но по нему сообщаем, что напоминание записано на сегодня.
@@ -60,6 +65,76 @@ export const dateLabel = (d) =>
   new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "long" }).format(
     new Date(d + "T12:00:00"),
   );
+
+/**
+ * Нужно ли переспросить о двусмысленном разборе перед сохранением.
+ *
+ * Вынесено из App.jsx: это решение о данных, а не о разметке, и его нужно
+ * проверять тестом. Ошибка здесь дорогая в обе стороны — лишний вопрос
+ * раздражает на каждой обычной фразе, а пропущенный сохраняет напоминание
+ * не на то время.
+ *
+ * Спрашиваем о часе, когда есть из чего выбрать: «в час» — 13:00 или 01:00,
+ * «полчетвёртого» — 15:30 или 03:30. Ошибка стоит полсуток, поэтому вопрос
+ * уместен.
+ *
+ * О нескольких датах — только когда дата уже известна: иначе человек сначала
+ * выбирает время, и вопрос о датах был бы преждевременным.
+ */
+export function wantsTimeConfirm(current) {
+  const doubts = current?.doubts || [];
+  if (doubts.some((d) => d.kind === "hour")) return true;
+  return (
+    doubts.some((d) => d.kind === "dates") &&
+    Boolean(current?.dates?.length || current?.selectedDates?.length)
+  );
+}
+
+/**
+ * Переносит разбор на другое чтение часа.
+ *
+ * Нужно для переспроса «13:00 или 01:00?»: показываем оба варианта, и выбор
+ * человека должен попасть и в расписание, и в текст в поле ввода. Иначе
+ * напоминание сработало бы по одному времени, а человек видел бы другое.
+ *
+ * В поле ввода время уже показано цифрами (в этом и смысл подсказки), поэтому
+ * заменяем прежнее «13:00» на выбранное — по исходной фразе («в час позвонить»)
+ * такую замену сделать нельзя: выбранного времени в ней ещё нет.
+ *
+ * @param {object} draft — текущий черновик
+ * @param {string} clock — выбранное время «ЧЧ:ММ»
+ * @param {string} [previous] — прежнее время, которое заменяем
+ * @param {Date} [now] — для сборки текста поля
+ */
+export function applyHourChoice(draft, clock, previous, now = new Date()) {
+  if (!draft || !clock) return draft;
+  const [h, m] = clock.split(":").map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return draft;
+  const old = previous || draft.doubts?.find((d) => d.kind === "hour")?.chosen;
+  const next = { ...draft };
+
+  // Время в расписании.
+  if (draft.schedule?.kind === "once" && draft.schedule.at) {
+    const at = new Date(draft.schedule.at);
+    at.setHours(h, m, 0, 0);
+    next.schedule = { ...draft.schedule, at: at.toISOString() };
+  }
+  const times = draft.times?.length ? draft.times : draft.schedule?.times;
+  if (times?.length) {
+    const patched = times.map((t) => (t === old ? clock : t));
+    next.times = patched;
+    if (next.schedule) next.schedule = { ...next.schedule, times: patched };
+  }
+
+  // Текст в поле ввода: «в 13:00 позвонить» → «в 01:00 позвонить».
+  if (old) {
+    const shown = editorPhrase(draft, now);
+    const patched = shown.replace(old, clock);
+    if (patched !== shown) next.phrase = patched;
+  }
+  return next;
+}
+
 
 /** Сдвиг месяца на step: «2026-11», -1 → «2026-10». */
 export function shiftMonth(m, step) {

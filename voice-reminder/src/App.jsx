@@ -72,6 +72,7 @@ import ScopeModal from "./components/ScopeModal.jsx";
 import FlipTimePicker from "./components/FlipTimePicker.jsx";
 import AccessModal from "./components/AccessModal.jsx";
 import PrivacyModal from "./components/PrivacyModal.jsx";
+import ConfirmTimeModal from "./components/ConfirmTimeModal.jsx";
 import {
   occurrenceScope,
   scopeWording,
@@ -89,6 +90,8 @@ import {
   cachedDrafts,
   dateLabel,
   dateNote,
+  applyHourChoice,
+  wantsTimeConfirm as wantsTimeConfirmDraft,
   shiftMonth,
 } from "./domain/draft-model.js";
 import "./planner.css";
@@ -127,6 +130,11 @@ export default function App() {
     [editingTimeAll, setEditingTimeAll] = useState(null),
     // Поле ввода в фокусе: подсказка на это время скрывается.
     [editorFocused, setEditorFocused] = useState(false),
+    // Переспрос о двусмысленном разборе: «в час» — 13:00 или 01:00,
+    // «полчетвёртого» — 15:30 или 03:30. Хранит, какое чтение человек выбрал;
+    // null — окно закрыто. Показывается только там, где разбор удался, но
+    // значение неоднозначно: это не ошибка, а вопрос.
+    [hourChoice, setHourChoice] = useState(null),
     // Карточки, которые сейчас уезжают вправо после удаления.
     [removing, setRemoving] = useState([]),
     // Черновики числовых полей настроек: то, что человек набрал прямо сейчас.
@@ -899,6 +907,24 @@ export default function App() {
           );
       }
       const current = draftRef.current;
+      // Переспрос о неоднозначном разборе — до сохранения.
+      //
+      // Раньше роль подтверждения играло поле ввода: человек правил текст
+      // руками. Этого не хватает там, где разбор формально верен, но значение
+      // можно понять двояко: «в час» — 13:00 или 01:00, «полчетвёртого» —
+      // 15:30 или 03:30. Молча выбранное дневное чтение сработало бы ночью,
+      // если человек имел в виду ночь.
+      //
+      // Спрашиваем один раз: выбор запоминается в hourChoice, и повторное
+      // нажатие «Готово» уже сохраняет.
+      if (!hourChoice && wantsTimeConfirmDraft(current)) {
+        saving.current = false;
+        setBusy(false);
+        setHourChoice(
+          current.doubts.find((d) => d.kind === "hour")?.chosen || "",
+        );
+        return;
+      }
       const rule = buildGroup(current, Date.now(), {
         allowPast: state?.reminders.some((r) => r.id === current.id),
       });
@@ -1644,6 +1670,33 @@ export default function App() {
             await setting({ name, onboarded: true });
             setModal(null);
           }}
+        />
+      )}
+      {hourChoice !== null && draft.doubts?.length && (
+        <ConfirmTimeModal
+          doubts={draft.doubts}
+          date={draft.dates?.[0] || draft.selectedDates?.[0] || ""}
+          picked={hourChoice}
+          onPick={(clock) => {
+            // Выбор сразу переносится в черновик: иначе напоминание
+            // сработало бы по дневному чтению, а человек выбрал ночное.
+            const next = applyHourChoice(draftRef.current, clock, hourChoice);
+            draftRef.current = next;
+            setDraft(next);
+            setHourChoice(clock);
+          }}
+          onConfirm={async () => {
+            // Повторное нажатие «Готово»: разбор уже подтверждён, окно
+            // закрыто, и сохранение идёт обычным путём.
+            setHourChoice(null);
+            await save();
+          }}
+          onEdit={() => {
+            setHourChoice(null);
+            setCreating(true);
+            setMessage("");
+          }}
+          onCancel={() => setHourChoice(null)}
         />
       )}
       {draft.dateConflict && !modal && (
