@@ -35,3 +35,5 @@ android/app/src/main/assets/public/
 
 # Модель Vosk (~87 МБ) версионируется намеренно: без неё APK не соберётся
 # в рабочий офлайн-распознаватель. Она не меняется между сборками.
+voice-reminder/android/.gradle-home/
+tmp-*
